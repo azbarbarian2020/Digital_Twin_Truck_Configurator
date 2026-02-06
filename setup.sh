@@ -77,12 +77,30 @@ setup_connection() {
         CONNECTION_NAME="$CONN_NAME"
     else
         echo ""
+        echo "Authentication method:"
+        echo "  1) Browser-based SSO (externalbrowser)"
+        echo "  2) Personal Access Token (PAT)"
+        read -p "Choose [1/2]: " AUTH_CHOICE
+        
+        echo ""
         echo -e "${YELLOW}Creating new connection: $CONN_NAME${NC}"
-        snow connection add \
-            --connection-name "$CONN_NAME" \
-            --account "$SNOWFLAKE_ACCOUNT" \
-            --user "$SNOWFLAKE_USER" \
-            --authenticator externalbrowser
+        
+        if [[ "$AUTH_CHOICE" == "2" ]]; then
+            read -p "Enter your PAT: " -s CONNECTION_PAT
+            echo ""
+            snow connection add \
+                --connection-name "$CONN_NAME" \
+                --account "$SNOWFLAKE_ACCOUNT" \
+                --user "$SNOWFLAKE_USER" \
+                --authenticator snowflake_jwt \
+                --token "$CONNECTION_PAT"
+        else
+            snow connection add \
+                --connection-name "$CONN_NAME" \
+                --account "$SNOWFLAKE_ACCOUNT" \
+                --user "$SNOWFLAKE_USER" \
+                --authenticator externalbrowser
+        fi
         CONNECTION_NAME="$CONN_NAME"
         echo -e "${GREEN}✓ Connection created${NC}"
     fi
@@ -101,7 +119,7 @@ setup_connection() {
 
 # Gather configuration
 gather_config() {
-    echo "Please provide deployment configuration:"
+    echo "Deployment Configuration (press Enter to accept defaults):"
     echo ""
     
     read -p "Snowflake Warehouse [COMPUTE_WH]: " SNOWFLAKE_WAREHOUSE
@@ -117,7 +135,7 @@ gather_config() {
     COMPUTE_POOL=${COMPUTE_POOL:-TRUCK_CONFIG_POOL}
     
     echo ""
-    echo "Configuration:"
+    echo "Configuration Summary:"
     echo "  Connection:   $CONNECTION_NAME"
     echo "  Account:      $SNOWFLAKE_ACCOUNT"
     echo "  User:         $SNOWFLAKE_USER"
@@ -141,8 +159,6 @@ setup_infrastructure() {
     
     snow_sql -q "CREATE DATABASE IF NOT EXISTS $DATABASE;"
     snow_sql -q "CREATE SCHEMA IF NOT EXISTS $DATABASE.$SCHEMA;"
-    snow_sql -q "USE DATABASE $DATABASE;"
-    snow_sql -q "USE SCHEMA $DATABASE.$SCHEMA;"
     
     # Create compute pool
     echo "Creating compute pool..."
@@ -161,15 +177,15 @@ setup_infrastructure() {
     REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
     echo -e "${GREEN}Image Repository URL: $REPO_URL${NC}"
     
-    # Create network rule and external access
+    # Create network rule and external access (use fully qualified names)
     echo "Creating external access integration..."
-    snow_sql -q "CREATE OR REPLACE NETWORK RULE $DATABASE.$SCHEMA.cortex_api_rule
+    snow_sql -q "CREATE OR REPLACE NETWORK RULE $DATABASE.$SCHEMA.CORTEX_API_RULE
         TYPE = HOST_PORT
         MODE = EGRESS
         VALUE_LIST = ('*.snowflakecomputing.com:443');"
     
     snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION TRUCK_CONFIG_EXTERNAL_ACCESS
-        ALLOWED_NETWORK_RULES = ($DATABASE.$SCHEMA.cortex_api_rule)
+        ALLOWED_NETWORK_RULES = ($DATABASE.$SCHEMA.CORTEX_API_RULE)
         ENABLED = TRUE;"
     
     echo -e "${GREEN}✓ Infrastructure created${NC}"
@@ -203,12 +219,12 @@ create_semantic_view() {
     echo -e "${GREEN}✓ Semantic view created${NC}"
 }
 
-# Setup PAT secret
+# Setup PAT secret for the app
 setup_secrets() {
     echo ""
-    echo -e "${YELLOW}Step 4: Setting up authentication...${NC}"
+    echo -e "${YELLOW}Step 4: Setting up app authentication...${NC}"
     echo ""
-    echo "You need a Personal Access Token (PAT) for Cortex Analyst API."
+    echo "The app needs a Personal Access Token (PAT) to call Cortex Analyst."
     echo "Create one at: Snowsight → Profile → Security → Personal Access Tokens"
     echo ""
     read -p "Enter your PAT (or press Enter to skip for now): " PAT_TOKEN
