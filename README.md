@@ -57,7 +57,35 @@ This demo showcases a **Digital Twin** approach to truck configuration where:
 - `snow` CLI installed (`pip install snowflake-cli`)
 - Personal Access Token (PAT) for Cortex Analyst API
 
-## Quick Start (15-20 minutes)
+## Quick Start - Automated Setup (Recommended)
+
+The easiest way to deploy is using the automated setup script:
+
+```bash
+# Clone the repository
+git clone https://github.com/azbarbarian2020/Digital_Twin_Truck_Configurator.git
+cd Digital_Twin_Truck_Configurator
+
+# Run the automated setup
+./setup.sh
+```
+
+The script will:
+1. Prompt for your Snowflake configuration (account, user, warehouse)
+2. Create database, schema, compute pool, and image repository
+3. Load all data (5 truck models, 253 BOM options, 868 option mappings)
+4. Create the semantic view with VQRs
+5. Set up PAT authentication
+6. Build and push the Docker image
+7. Deploy the SPCS service
+
+**Total time: ~10-15 minutes**
+
+---
+
+## Manual Setup (Alternative)
+
+If you prefer to run each step manually:
 
 ### Step 1: Clone the Repository
 ```bash
