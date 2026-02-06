@@ -277,7 +277,11 @@ build_docker() {
     
     # Login to Snowflake registry
     echo "Logging into Snowflake image registry..."
-    snow_spcs "image-registry" login
+    if [[ -n "$CONNECTION_NAME" ]]; then
+        snow spcs image-registry login --connection "$CONNECTION_NAME"
+    else
+        snow spcs image-registry login
+    fi
     
     # Get repository URL
     REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
