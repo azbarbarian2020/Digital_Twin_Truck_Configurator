@@ -88,12 +88,17 @@ setup_connection() {
         if [[ "$AUTH_CHOICE" == "2" ]]; then
             read -p "Enter your PAT: " -s CONNECTION_PAT
             echo ""
+            # Save PAT to a temp file for the connection
+            TOKEN_FILE="$HOME/.snowflake/${CONN_NAME}_token"
+            mkdir -p "$HOME/.snowflake"
+            echo "$CONNECTION_PAT" > "$TOKEN_FILE"
+            chmod 600 "$TOKEN_FILE"
             snow connection add \
                 --connection-name "$CONN_NAME" \
                 --account "$SNOWFLAKE_ACCOUNT" \
                 --user "$SNOWFLAKE_USER" \
-                --authenticator snowflake_jwt \
-                --token "$CONNECTION_PAT"
+                --authenticator oauth \
+                --token-file-path "$TOKEN_FILE"
         else
             snow connection add \
                 --connection-name "$CONN_NAME" \
