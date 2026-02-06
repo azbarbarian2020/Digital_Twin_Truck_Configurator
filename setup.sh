@@ -15,6 +15,27 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Global connection name
+CONNECTION_NAME=""
+
+# Helper function to run snow sql with correct connection
+snow_sql() {
+    if [[ -n "$CONNECTION_NAME" ]]; then
+        snow sql --connection "$CONNECTION_NAME" "$@"
+    else
+        snow sql "$@"
+    fi
+}
+
+# Helper function for snow spcs commands
+snow_spcs() {
+    if [[ -n "$CONNECTION_NAME" ]]; then
+        snow spcs --connection "$CONNECTION_NAME" "$@"
+    else
+        snow spcs "$@"
+    fi
+}
+
 # Check prerequisites
 check_prereqs() {
     echo "Checking prerequisites..."
@@ -33,16 +54,56 @@ check_prereqs() {
     echo ""
 }
 
-# Gather configuration
-gather_config() {
-    echo "Please provide your Snowflake configuration:"
+# Setup or select connection
+setup_connection() {
+    echo "Snowflake Connection Setup"
+    echo "--------------------------"
     echo ""
     
-    # Check for existing connection
-    CURRENT_CONN=$(snow connection list --format json 2>/dev/null | grep -o '"default": true' || echo "")
+    # List existing connections
+    echo "Existing connections:"
+    snow connection list 2>/dev/null || echo "  (none found)"
+    echo ""
     
     read -p "Snowflake Account (e.g., MYORG-MYACCOUNT): " SNOWFLAKE_ACCOUNT
     read -p "Snowflake Username: " SNOWFLAKE_USER
+    
+    # Create connection name from account (lowercase, replace - with _)
+    CONN_NAME=$(echo "$SNOWFLAKE_ACCOUNT" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+    
+    # Check if connection exists
+    if snow connection list 2>/dev/null | grep -q "$CONN_NAME"; then
+        echo -e "${GREEN}Found existing connection: $CONN_NAME${NC}"
+        CONNECTION_NAME="$CONN_NAME"
+    else
+        echo ""
+        echo -e "${YELLOW}Creating new connection: $CONN_NAME${NC}"
+        snow connection add \
+            --connection-name "$CONN_NAME" \
+            --account "$SNOWFLAKE_ACCOUNT" \
+            --user "$SNOWFLAKE_USER" \
+            --authenticator externalbrowser
+        CONNECTION_NAME="$CONN_NAME"
+        echo -e "${GREEN}✓ Connection created${NC}"
+    fi
+    
+    # Test the connection
+    echo ""
+    echo "Testing connection..."
+    if snow connection test --connection "$CONNECTION_NAME"; then
+        echo -e "${GREEN}✓ Connection successful${NC}"
+    else
+        echo -e "${RED}Connection failed. Please check your credentials.${NC}"
+        exit 1
+    fi
+    echo ""
+}
+
+# Gather configuration
+gather_config() {
+    echo "Please provide deployment configuration:"
+    echo ""
+    
     read -p "Snowflake Warehouse [COMPUTE_WH]: " SNOWFLAKE_WAREHOUSE
     SNOWFLAKE_WAREHOUSE=${SNOWFLAKE_WAREHOUSE:-COMPUTE_WH}
     
@@ -57,6 +118,7 @@ gather_config() {
     
     echo ""
     echo "Configuration:"
+    echo "  Connection:   $CONNECTION_NAME"
     echo "  Account:      $SNOWFLAKE_ACCOUNT"
     echo "  User:         $SNOWFLAKE_USER"
     echo "  Warehouse:    $SNOWFLAKE_WAREHOUSE"
@@ -77,13 +139,14 @@ setup_infrastructure() {
     echo ""
     echo -e "${YELLOW}Step 1: Creating infrastructure...${NC}"
     
-    snow sql -q "CREATE DATABASE IF NOT EXISTS $DATABASE;"
-    snow sql -q "CREATE SCHEMA IF NOT EXISTS $DATABASE.$SCHEMA;"
-    snow sql -q "USE SCHEMA $DATABASE.$SCHEMA;"
+    snow_sql -q "CREATE DATABASE IF NOT EXISTS $DATABASE;"
+    snow_sql -q "CREATE SCHEMA IF NOT EXISTS $DATABASE.$SCHEMA;"
+    snow_sql -q "USE DATABASE $DATABASE;"
+    snow_sql -q "USE SCHEMA $DATABASE.$SCHEMA;"
     
     # Create compute pool
     echo "Creating compute pool..."
-    snow sql -q "CREATE COMPUTE POOL IF NOT EXISTS $COMPUTE_POOL
+    snow_sql -q "CREATE COMPUTE POOL IF NOT EXISTS $COMPUTE_POOL
         MIN_NODES = 1
         MAX_NODES = 1
         INSTANCE_FAMILY = CPU_X64_XS
@@ -92,21 +155,21 @@ setup_infrastructure() {
     
     # Create image repository
     echo "Creating image repository..."
-    snow sql -q "CREATE IMAGE REPOSITORY IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIG_REPO;"
+    snow_sql -q "CREATE IMAGE REPOSITORY IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIG_REPO;"
     
     # Get repository URL
-    REPO_URL=$(snow sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
+    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
     echo -e "${GREEN}Image Repository URL: $REPO_URL${NC}"
     
     # Create network rule and external access
     echo "Creating external access integration..."
-    snow sql -q "CREATE OR REPLACE NETWORK RULE cortex_api_rule
+    snow_sql -q "CREATE OR REPLACE NETWORK RULE $DATABASE.$SCHEMA.cortex_api_rule
         TYPE = HOST_PORT
         MODE = EGRESS
         VALUE_LIST = ('*.snowflakecomputing.com:443');"
     
-    snow sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION TRUCK_CONFIG_EXTERNAL_ACCESS
-        ALLOWED_NETWORK_RULES = (cortex_api_rule)
+    snow_sql -q "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION TRUCK_CONFIG_EXTERNAL_ACCESS
+        ALLOWED_NETWORK_RULES = ($DATABASE.$SCHEMA.cortex_api_rule)
         ENABLED = TRUE;"
     
     echo -e "${GREEN}✓ Infrastructure created${NC}"
@@ -123,9 +186,9 @@ load_data() {
     sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" scripts/02c_truck_options.sql
     sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" scripts/03_semantic_view.sql
     
-    snow sql -f scripts/02_data.sql
-    snow sql -f scripts/02b_bom_data.sql
-    snow sql -f scripts/02c_truck_options.sql
+    snow_sql -f scripts/02_data.sql
+    snow_sql -f scripts/02b_bom_data.sql
+    snow_sql -f scripts/02c_truck_options.sql
     
     echo -e "${GREEN}✓ Data loaded${NC}"
 }
@@ -135,7 +198,7 @@ create_semantic_view() {
     echo ""
     echo -e "${YELLOW}Step 3: Creating semantic view...${NC}"
     
-    snow sql -f scripts/03_semantic_view.sql
+    snow_sql -f scripts/03_semantic_view.sql
     
     echo -e "${GREEN}✓ Semantic view created${NC}"
 }
@@ -151,7 +214,7 @@ setup_secrets() {
     read -p "Enter your PAT (or press Enter to skip for now): " PAT_TOKEN
     
     if [[ -n "$PAT_TOKEN" ]]; then
-        snow sql -q "CREATE OR REPLACE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET
+        snow_sql -q "CREATE OR REPLACE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET
             TYPE = GENERIC_STRING
             SECRET_STRING = '$PAT_TOKEN';"
         echo -e "${GREEN}✓ PAT secret created${NC}"
@@ -168,10 +231,10 @@ build_docker() {
     
     # Login to Snowflake registry
     echo "Logging into Snowflake image registry..."
-    snow spcs image-registry login
+    snow_spcs image-registry login
     
     # Get repository URL
-    REPO_URL=$(snow sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
+    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
     
     echo "Building Docker image (this may take a few minutes)..."
     cd docker
@@ -193,9 +256,9 @@ deploy_service() {
     echo -e "${YELLOW}Step 6: Deploying SPCS service...${NC}"
     
     # Get repository URL
-    REPO_URL=$(snow sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
+    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
     
-    snow sql -q "CREATE SERVICE IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC
+    snow_sql -q "CREATE SERVICE IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC
       IN COMPUTE POOL $COMPUTE_POOL
       FROM SPECIFICATION \$\$
 spec:
@@ -236,7 +299,7 @@ MAX_INSTANCES = 1;"
     sleep 30
     
     # Check status
-    STATUS=$(snow sql -q "SELECT SYSTEM\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');" --format json | grep -o '"status": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "PENDING")
+    STATUS=$(snow_sql -q "SELECT SYSTEM\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');" --format json | grep -o '"status": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "PENDING")
     
     if [[ "$STATUS" == *"RUNNING"* ]]; then
         echo -e "${GREEN}✓ Service is running!${NC}"
@@ -252,7 +315,7 @@ get_service_url() {
     
     sleep 10
     
-    snow sql -q "SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;"
+    snow_sql -q "SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;"
     
     echo ""
     echo -e "${GREEN}=================================================="
@@ -261,16 +324,17 @@ get_service_url() {
     echo ""
     echo "Your Digital Twin Truck Configurator is deploying."
     echo "Run this to check status:"
-    echo "  snow sql -q \"SELECT SYSTEM\\\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');\""
+    echo "  snow sql --connection $CONNECTION_NAME -q \"SELECT SYSTEM\\\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');\""
     echo ""
     echo "Run this to get the URL:"
-    echo "  snow sql -q \"SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;\""
+    echo "  snow sql --connection $CONNECTION_NAME -q \"SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;\""
     echo ""
 }
 
 # Main execution
 main() {
     check_prereqs
+    setup_connection
     gather_config
     setup_infrastructure
     load_data
