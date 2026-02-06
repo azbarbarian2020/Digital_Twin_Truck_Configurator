@@ -226,11 +226,12 @@ load_data() {
     echo ""
     echo -e "${YELLOW}Step 2: Loading data...${NC}"
     
-    # Update scripts with user's schema
-    sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" scripts/02_data.sql
-    sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" scripts/02b_bom_data.sql
-    sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" scripts/02c_truck_options.sql
-    sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" scripts/03_semantic_view.sql
+    # Update ALL scripts with user's database and schema
+    for script in scripts/02_data.sql scripts/02b_bom_data.sql scripts/02c_truck_options.sql scripts/03_semantic_view.sql scripts/04_additional_objects.sql; do
+        if [[ -f "$script" ]]; then
+            sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" "$script"
+        fi
+    done
     
     snow_sql -f scripts/02_data.sql
     snow_sql -f scripts/02b_bom_data.sql
@@ -249,10 +250,23 @@ create_semantic_view() {
     echo -e "${GREEN}✓ Semantic view created${NC}"
 }
 
+# Create additional objects (stages, Cortex Search, etc.)
+create_additional_objects() {
+    echo ""
+    echo -e "${YELLOW}Step 4: Creating additional objects (stages, Cortex Search)...${NC}"
+    
+    # Update warehouse reference in script
+    sed -i.bak "s/WAREHOUSE = DEMO_WH/WAREHOUSE = $SNOWFLAKE_WAREHOUSE/g" scripts/04_additional_objects.sql
+    
+    snow_sql -f scripts/04_additional_objects.sql
+    
+    echo -e "${GREEN}✓ Additional objects created${NC}"
+}
+
 # Setup PAT secret for the app
 setup_secrets() {
     echo ""
-    echo -e "${YELLOW}Step 4: Setting up app authentication...${NC}"
+    echo -e "${YELLOW}Step 5: Setting up app authentication...${NC}"
     echo ""
     echo "The app needs a Personal Access Token (PAT) to call Cortex Analyst."
     echo "Create one at: Snowsight → Profile → Security → Personal Access Tokens"
@@ -273,7 +287,7 @@ setup_secrets() {
 # Build and push Docker image
 build_docker() {
     echo ""
-    echo -e "${YELLOW}Step 5: Building Docker image...${NC}"
+    echo -e "${YELLOW}Step 6: Building Docker image...${NC}"
     
     # Login to Snowflake registry
     echo "Logging into Snowflake image registry..."
@@ -303,7 +317,7 @@ build_docker() {
 # Deploy service
 deploy_service() {
     echo ""
-    echo -e "${YELLOW}Step 6: Deploying SPCS service...${NC}"
+    echo -e "${YELLOW}Step 7: Deploying SPCS service...${NC}"
     
     # Get repository URL
     REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
@@ -361,7 +375,7 @@ MAX_INSTANCES = 1;"
 # Get service URL
 get_service_url() {
     echo ""
-    echo -e "${YELLOW}Step 7: Getting service URL...${NC}"
+    echo -e "${YELLOW}Step 8: Getting service URL...${NC}"
     
     sleep 10
     
@@ -389,6 +403,7 @@ main() {
     setup_infrastructure
     load_data
     create_semantic_view
+    create_additional_objects
     setup_secrets
     
     echo ""
