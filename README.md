@@ -265,18 +265,44 @@ snow sql -q "ALTER SERVICE BOM.BOM4.TRUCK_CONFIGURATOR_SVC FROM SPECIFICATION \$
 
 ## Demo Scenarios
 
-1. **Basic Configuration**: Select a truck model, explore options, see real-time cost/weight updates
+### 1. Basic Configuration
+Select a truck model, explore options across 40+ component groups, and watch real-time cost/weight updates as you make selections.
 
-2. **AI Optimization**: Open Configuration Assistant and ask:
-   - "Maximize hauling for this truck"
-   - "What's the best safety configuration?"
-   - "Minimize all costs"
+### 2. AI-Powered Optimization
+Open the **Configuration Assistant** panel and ask natural language questions:
+- "Maximize hauling for this truck"
+- "What's the best safety configuration?"
+- "Minimize all costs"
 
-3. **Multi-Category Optimization**: 
-   - "Maximize safety and comfort while minimizing all other costs"
-   - Watch as the AI recommends optimal parts across all component groups
+### 3. Multi-Category Optimization
+Try complex optimization queries:
+- "Maximize safety and comfort while minimizing all other costs"
+- Watch as Cortex Analyst recommends optimal parts across all component groups
+- Click **"Apply"** to automatically configure the truck with AI recommendations
 
-4. **Apply Recommendations**: Click "Apply" to automatically configure the truck with AI recommendations
+### 4. Engineering Document Upload (Interactive Demo)
+
+This scenario demonstrates document upload and RAG-based search:
+
+1. **Preparation**: Save the included `605_HP_Engine_Requirements.pdf` to your desktop
+   - File is located at: `docker/public/docs/605_HP_Engine_Requirements.pdf`
+
+2. **In the Application**:
+   - Select the **Heavy Haul Max HH-1200** or **Executive Hauler EX-1500** model
+   - Click on the **"Engineering Docs"** tab
+   - Click **"Upload Document"**
+   - Select `605_HP_Engine_Requirements.pdf` from your desktop
+
+3. **Ask Questions About the Document**:
+   - "What are the requirements for the 605 HP engine?"
+   - "Which components are compatible with the 605 HP upgrade?"
+   - "What cooling system is required for the maximum power engine?"
+
+4. **See RAG in Action**: The Configuration Assistant uses Cortex Search to find relevant document chunks and answers based on the uploaded engineering specifications.
+
+### 5. Compare Configurations
+- Configure two different trucks
+- Use the **Compare** feature to see side-by-side differences in cost, weight, and component choices
 
 ## License
 
