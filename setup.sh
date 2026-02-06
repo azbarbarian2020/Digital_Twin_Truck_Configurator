@@ -67,50 +67,72 @@ setup_connection() {
     snow connection list 2>/dev/null || echo "  (none found)"
     echo ""
     
-    read -p "Snowflake Account (e.g., MYORG-MYACCOUNT): " SNOWFLAKE_ACCOUNT
-    read -p "Snowflake Username: " SNOWFLAKE_USER
+    read -p "Use existing connection? Enter name (or press Enter to create new): " EXISTING_CONN
     
-    # Create connection name from account (lowercase, replace - with _)
-    CONN_NAME=$(echo "$SNOWFLAKE_ACCOUNT" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-    
-    # Check if connection exists
-    if snow connection list 2>/dev/null | grep -q "$CONN_NAME"; then
-        echo -e "${GREEN}Found existing connection: $CONN_NAME${NC}"
-        CONNECTION_NAME="$CONN_NAME"
-    else
-        echo ""
-        echo "Authentication method:"
-        echo "  1) Browser-based SSO (externalbrowser)"
-        echo "  2) Personal Access Token (PAT)"
-        read -p "Choose [1/2]: " AUTH_CHOICE
+    if [[ -n "$EXISTING_CONN" ]]; then
+        # Use existing connection
+        CONNECTION_NAME="$EXISTING_CONN"
+        echo -e "${GREEN}Using existing connection: $CONNECTION_NAME${NC}"
         
-        echo ""
-        echo -e "${YELLOW}Creating new connection: $CONN_NAME${NC}"
+        # Extract account and user from connection
+        SNOWFLAKE_ACCOUNT=$(snow connection list --format json 2>/dev/null | grep -A5 "\"$CONNECTION_NAME\"" | grep -o '"account": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
+        SNOWFLAKE_USER=$(snow connection list --format json 2>/dev/null | grep -A5 "\"$CONNECTION_NAME\"" | grep -o '"user": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
         
-        if [[ "$AUTH_CHOICE" == "2" ]]; then
-            read -p "Enter your PAT: " -s CONNECTION_PAT
-            echo ""
-            # Save PAT to a temp file for the connection
-            TOKEN_FILE="$HOME/.snowflake/${CONN_NAME}_token"
-            mkdir -p "$HOME/.snowflake"
-            echo "$CONNECTION_PAT" > "$TOKEN_FILE"
-            chmod 600 "$TOKEN_FILE"
-            snow connection add \
-                --no-interactive \
-                --connection-name "$CONN_NAME" \
-                --account "$SNOWFLAKE_ACCOUNT" \
-                --user "$SNOWFLAKE_USER" \
-                --authenticator PROGRAMMATIC_ACCESS_TOKEN \
-                --token-file-path "$TOKEN_FILE"
-        else
-            snow connection add \
-                --connection-name "$CONN_NAME" \
-                --account "$SNOWFLAKE_ACCOUNT" \
-                --user "$SNOWFLAKE_USER" \
-                --authenticator externalbrowser
+        # If we couldn't extract, ask
+        if [[ -z "$SNOWFLAKE_ACCOUNT" ]]; then
+            read -p "Snowflake Account (for service config): " SNOWFLAKE_ACCOUNT
         fi
-        CONNECTION_NAME="$CONN_NAME"
-        echo -e "${GREEN}✓ Connection created${NC}"
+        if [[ -z "$SNOWFLAKE_USER" ]]; then
+            read -p "Snowflake Username (for service config): " SNOWFLAKE_USER
+        fi
+    else
+        # Create new connection
+        read -p "Snowflake Account (e.g., MYORG-MYACCOUNT): " SNOWFLAKE_ACCOUNT
+        read -p "Snowflake Username: " SNOWFLAKE_USER
+        
+        # Create connection name from account (lowercase, replace - with _)
+        CONN_NAME=$(echo "$SNOWFLAKE_ACCOUNT" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+        
+        # Check if connection already exists with this name
+        if snow connection list 2>/dev/null | grep -q "$CONN_NAME"; then
+            echo -e "${GREEN}Found existing connection: $CONN_NAME${NC}"
+            CONNECTION_NAME="$CONN_NAME"
+        else
+            echo ""
+            echo "Authentication method:"
+            echo "  1) Browser-based SSO (externalbrowser)"
+            echo "  2) Personal Access Token (PAT)"
+            read -p "Choose [1/2]: " AUTH_CHOICE
+            
+            echo ""
+            echo -e "${YELLOW}Creating new connection: $CONN_NAME${NC}"
+            
+            if [[ "$AUTH_CHOICE" == "2" ]]; then
+                read -p "Enter your PAT: " -s CONNECTION_PAT
+                echo ""
+                # Save PAT to a temp file for the connection
+                TOKEN_FILE="$HOME/.snowflake/${CONN_NAME}_token"
+                mkdir -p "$HOME/.snowflake"
+                echo "$CONNECTION_PAT" > "$TOKEN_FILE"
+                chmod 600 "$TOKEN_FILE"
+                snow connection add \
+                    --no-interactive \
+                    --connection-name "$CONN_NAME" \
+                    --account "$SNOWFLAKE_ACCOUNT" \
+                    --user "$SNOWFLAKE_USER" \
+                    --authenticator PROGRAMMATIC_ACCESS_TOKEN \
+                    --token-file-path "$TOKEN_FILE"
+            else
+                snow connection add \
+                    --no-interactive \
+                    --connection-name "$CONN_NAME" \
+                    --account "$SNOWFLAKE_ACCOUNT" \
+                    --user "$SNOWFLAKE_USER" \
+                    --authenticator externalbrowser
+            fi
+            CONNECTION_NAME="$CONN_NAME"
+            echo -e "${GREEN}✓ Connection created${NC}"
+        fi
     fi
     
     # Test the connection
