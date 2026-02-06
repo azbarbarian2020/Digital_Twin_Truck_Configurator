@@ -94,10 +94,11 @@ setup_connection() {
             echo "$CONNECTION_PAT" > "$TOKEN_FILE"
             chmod 600 "$TOKEN_FILE"
             snow connection add \
+                --no-interactive \
                 --connection-name "$CONN_NAME" \
                 --account "$SNOWFLAKE_ACCOUNT" \
                 --user "$SNOWFLAKE_USER" \
-                --authenticator oauth \
+                --authenticator PROGRAMMATIC_ACCESS_TOKEN \
                 --token-file-path "$TOKEN_FILE"
         else
             snow connection add \
