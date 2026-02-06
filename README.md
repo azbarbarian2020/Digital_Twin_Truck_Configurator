@@ -18,37 +18,44 @@ This demo showcases a **Digital Twin** approach to truck configuration where:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    SPCS Service (TRUCK_CONFIGURATOR_SVC)        │
-│  ┌───────────┐   ┌───────────┐   ┌───────────────────────────┐ │
-│  │   nginx   │───│  Next.js  │   │      FastAPI Backend      │ │
-│  │  :8080    │   │   :3000   │   │         :8000             │ │
-│  └───────────┘   └───────────┘   └───────────────────────────┘ │
-│         │              │                      │                 │
-│         │              │                      ▼                 │
-│         │              │         ┌───────────────────────────┐ │
-│         │              │         │   Cortex Analyst REST API │ │
-│         │              │         │   (Semantic View Query)   │ │
-│         │              │         └───────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Snowflake Data Layer                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌───────────────────────┐   │
-│  │  MODEL_TBL  │  │   BOM_TBL   │  │    TRUCK_OPTIONS      │   │
-│  │  (5 models) │  │ (253 parts) │  │  (model-option map)   │   │
-│  └─────────────┘  └─────────────┘  └───────────────────────┘   │
-│                         ▲                                       │
-│                         │                                       │
-│           ┌─────────────────────────────┐                       │
-│           │ TRUCK_CONFIG_ANALYST_V2     │                       │
-│           │    (Semantic View)          │                       │
-│           │ - VQRs for optimization     │                       │
-│           │ - Custom instructions       │                       │
-│           └─────────────────────────────┘                       │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                       SPCS Service (TRUCK_CONFIGURATOR_SVC)                  │
+│  ┌───────────┐   ┌───────────┐   ┌────────────────────────────────────────┐ │
+│  │   nginx   │───│  Next.js  │   │           FastAPI Backend              │ │
+│  │  :8080    │   │   :3000   │   │              :8000                     │ │
+│  └───────────┘   └───────────┘   └────────────────────────────────────────┘ │
+│         │              │                    │                  │             │
+│         │              │                    ▼                  ▼             │
+│         │              │    ┌─────────────────────┐  ┌──────────────────┐   │
+│         │              │    │ Cortex Analyst API  │  │ Cortex Search    │   │
+│         │              │    │ (Semantic View)     │  │ (Engineering     │   │
+│         │              │    │                     │  │  Docs RAG)       │   │
+│         │              │    └─────────────────────┘  └──────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                      │                        │
+                                      ▼                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                          Snowflake Data Layer                                │
+│                                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌───────────────┐  ┌──────────────────┐  │
+│  │  MODEL_TBL  │  │   BOM_TBL   │  │ TRUCK_OPTIONS │  │ ENGINEERING_DOCS │  │
+│  │  (5 models) │  │ (253 parts) │  │ (868 mappings)│  │  (uploaded PDFs) │  │
+│  └─────────────┘  └─────────────┘  └───────────────┘  └──────────────────┘  │
+│         │               │                 │                    │             │
+│         ▼               ▼                 ▼                    ▼             │
+│  ┌─────────────────────────────────┐           ┌─────────────────────────┐  │
+│  │   TRUCK_CONFIG_ANALYST_V2       │           │ ENGINEERING_DOCS_SEARCH │  │
+│  │      (Semantic View)            │           │   (Cortex Search Svc)   │  │
+│  │  - VQRs for optimization        │           │   - Document chunks     │  │
+│  │  - Custom SQL instructions      │           │   - Vector embeddings   │  │
+│  └─────────────────────────────────┘           └─────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Key Components:**
+- **Cortex Analyst** - Natural language to SQL for truck configuration optimization
+- **Cortex Search** - RAG-based search over uploaded engineering documents
+- **Semantic View** - Defines relationships between models, options, and mappings with VQRs
 
 ## Prerequisites
 
