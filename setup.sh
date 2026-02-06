@@ -29,10 +29,12 @@ snow_sql() {
 
 # Helper function for snow spcs commands
 snow_spcs() {
+    local subcmd="$1"
+    shift
     if [[ -n "$CONNECTION_NAME" ]]; then
-        snow spcs --connection "$CONNECTION_NAME" "$@"
+        snow spcs $subcmd --connection "$CONNECTION_NAME" "$@"
     else
-        snow spcs "$@"
+        snow spcs $subcmd "$@"
     fi
 }
 
@@ -253,7 +255,7 @@ build_docker() {
     
     # Login to Snowflake registry
     echo "Logging into Snowflake image registry..."
-    snow_spcs image-registry login
+    snow_spcs "image-registry" login
     
     # Get repository URL
     REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
