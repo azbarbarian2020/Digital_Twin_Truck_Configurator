@@ -324,7 +324,7 @@ spec:
         SNOWFLAKE_SEMANTIC_VIEW: $DATABASE.$SCHEMA.TRUCK_CONFIG_ANALYST_V2
       secrets:
         - snowflakeSecret: $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET
-          secretKeyRef: token
+          secretKeyRef: secret_string
           envVarName: SNOWFLAKE_PAT
       resources:
         requests:
