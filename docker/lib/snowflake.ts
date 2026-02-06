@@ -49,7 +49,7 @@ function getOAuthToken(): string | null {
 }
 
 function getConfig(): snowflake.ConnectionOptions {
-  const host = process.env.SNOWFLAKE_HOST || "sfsenorthamerica-awsbarbarian.snowflakecomputing.com";
+  const host = process.env.SNOWFLAKE_HOST || `${process.env.SNOWFLAKE_ACCOUNT}.snowflakecomputing.com`;
   const account = process.env.SNOWFLAKE_ACCOUNT || "SFSENORTHAMERICA-AWSBARBARIAN";
   
   const baseConfig = {

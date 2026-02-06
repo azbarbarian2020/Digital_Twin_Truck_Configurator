@@ -25,7 +25,7 @@ app.add_middleware(
 )
 
 SNOWFLAKE_ACCOUNT = os.getenv("SNOWFLAKE_ACCOUNT", "SFSENORTHAMERICA-AWSBARBARIAN")
-SNOWFLAKE_HOST = os.getenv("SNOWFLAKE_HOST", "sfsenorthamerica-awsbarbarian.snowflakecomputing.com")
+SNOWFLAKE_HOST = os.getenv("SNOWFLAKE_HOST", f"{os.getenv('SNOWFLAKE_ACCOUNT', '')}.snowflakecomputing.com")
 SNOWFLAKE_WAREHOUSE = os.getenv("SNOWFLAKE_WAREHOUSE", "DEMO_WH")
 SNOWFLAKE_DATABASE = os.getenv("SNOWFLAKE_DATABASE", "BOM")
 SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "BOM4")
@@ -171,7 +171,7 @@ def get_connection():
         )
     else:
         print("Connecting with connection name (local dev)")
-        conn_name = os.getenv("SNOWFLAKE_CONNECTION_NAME", "awsbarbarian_CoCo")
+        conn_name = os.getenv("SNOWFLAKE_CONNECTION_NAME", "")
         _connection = snowflake.connector.connect(
             connection_name=conn_name,
             warehouse=SNOWFLAKE_WAREHOUSE,
