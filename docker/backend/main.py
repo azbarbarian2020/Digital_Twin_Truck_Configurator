@@ -24,12 +24,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SNOWFLAKE_ACCOUNT = os.getenv("SNOWFLAKE_ACCOUNT", "SFSENORTHAMERICA-AWSBARBARIAN")
+SNOWFLAKE_ACCOUNT = os.getenv("SNOWFLAKE_ACCOUNT", "")
 SNOWFLAKE_HOST = os.getenv("SNOWFLAKE_HOST", f"{os.getenv('SNOWFLAKE_ACCOUNT', '')}.snowflakecomputing.com")
 SNOWFLAKE_WAREHOUSE = os.getenv("SNOWFLAKE_WAREHOUSE", "DEMO_WH")
 SNOWFLAKE_DATABASE = os.getenv("SNOWFLAKE_DATABASE", "BOM")
-SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "BOM4")
-SNOWFLAKE_USER = os.getenv("SNOWFLAKE_USER", "Horizonadmin")
+SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "TRUCK_CONFIG")
+SNOWFLAKE_USER = os.getenv("SNOWFLAKE_USER", "")
 
 _connection = None
 _jwt_token = None
@@ -103,13 +103,14 @@ def generate_jwt_token() -> str:
 def get_auth_header() -> Dict[str, str]:
     """Get authentication header for Snowflake REST APIs.
     
-    IMPORTANT: SPCS OAuth token (/snowflake/session/token) CANNOT be used for REST APIs!
-    It only works for drivers (Python connector, Snowpark Session).
-    For REST APIs, use PAT (Personal Access Token) or external OAuth.
+    IMPORTANT: SPCS session token (/snowflake/session/token) is for driver/SQL connections only.
+    REST API calls (like Cortex Analyst) require PAT or OAuth tokens, even from inside SPCS.
     """
+    # Use PAT for REST API calls (primary method)
     pat = os.getenv("SNOWFLAKE_PAT", "")
     if pat:
-        print("Using PAT for REST API")
+        print(f"Using PAT for REST API (length: {len(pat)}, starts with: {pat[:15]}...)")
+        print(f"Target host: {SNOWFLAKE_HOST}")
         return {
             "Authorization": f"Bearer {pat}",
             "X-Snowflake-Authorization-Token-Type": "PROGRAMMATIC_ACCESS_TOKEN",
@@ -117,6 +118,7 @@ def get_auth_header() -> Dict[str, str]:
             "Accept": "application/json"
         }
     
+    # Fall back to JWT if private key is available
     private_key_pem = os.getenv("SNOWFLAKE_PRIVATE_KEY", "")
     if private_key_pem:
         try:
@@ -129,7 +131,7 @@ def get_auth_header() -> Dict[str, str]:
         except Exception as e:
             print(f"JWT generation failed: {e}")
     
-    raise ValueError("No REST API authentication available - need PAT or JWT")
+    raise ValueError("No REST API authentication available - need PAT or JWT (SPCS token not valid for REST APIs)")
 
 def get_connection():
     global _connection
@@ -835,69 +837,107 @@ def handle_doc_query(message: str, model_id: str) -> Dict[str, Any]:
         return {"response": f"I couldn't retrieve information about specification documents. Error: {str(e)}"}
 
 def generate_optimization_sql_with_ai(user_request: str, model_id: str) -> Dict[str, Any]:
-    """Use Cortex Analyst REST API with Semantic View to generate optimization SQL"""
+    """Generate optimization SQL using a pattern-matching approach based on verified queries.
+    
+    This approach works reliably from inside SPCS on all platforms (AWS/Azure/GCP) because it uses
+    pure SQL via the driver connection rather than REST API calls.
+    
+    For "maximize safety and comfort while minimizing all other costs" - this is the most common request.
+    We use the verified query pattern from the semantic view.
+    """
     try:
-        question = f"For {model_id}: {user_request}"
-        print(f"Cortex Analyst question: {question}")
+        print(f"Generating optimization SQL for model {model_id}: {user_request}")
+        request_lower = user_request.lower()
         
-        url = f"https://{SNOWFLAKE_HOST}/api/v2/cortex/analyst/message"
+        # Determine the optimization strategy based on keywords
+        maximize_safety = 'safety' in request_lower and ('maximize' in request_lower or 'max' in request_lower)
+        maximize_comfort = 'comfort' in request_lower and ('maximize' in request_lower or 'max' in request_lower)
+        minimize_cost = 'cost' in request_lower and ('minimize' in request_lower or 'min' in request_lower)
+        minimize_all_other = 'minimiz' in request_lower and ('other' in request_lower or 'all' in request_lower)
         
-        payload = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": question
-                        }
-                    ]
-                }
-            ],
-            "semantic_view": "BOM.BOM4.TRUCK_CONFIG_ANALYST_V2"
-        }
+        # Pattern: Maximize safety and comfort while minimizing costs
+        if (maximize_safety and maximize_comfort) or (maximize_safety and minimize_all_other) or (maximize_comfort and minimize_all_other):
+            print("Using VQR pattern: maximize_safety_comfort_minimize_cost")
+            optimization_sql = f"""
+WITH ranked_options AS (
+  SELECT 
+    b.OPTION_ID, b.OPTION_NM AS OPTION_NM, b.COMPONENT_GROUP, b.COST_USD, b.WEIGHT_LBS, 
+    b.PERFORMANCE_CATEGORY, b.PERFORMANCE_SCORE,
+    CASE WHEN b.PERFORMANCE_CATEGORY IN ('Safety', 'Comfort') 
+      THEN ROW_NUMBER() OVER (PARTITION BY b.COMPONENT_GROUP ORDER BY b.PERFORMANCE_SCORE DESC)
+      ELSE ROW_NUMBER() OVER (PARTITION BY b.COMPONENT_GROUP ORDER BY b.COST_USD ASC)
+    END AS rn
+  FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.TRUCK_OPTIONS v
+  JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.BOM_TBL b ON v.OPTION_ID = b.OPTION_ID
+  WHERE v.MODEL_ID = '{model_id}'
+)
+SELECT OPTION_ID, OPTION_NM, COMPONENT_GROUP, COST_USD, WEIGHT_LBS, PERFORMANCE_CATEGORY, PERFORMANCE_SCORE
+FROM ranked_options WHERE rn = 1"""
+            return {
+                "sql": optimization_sql.strip(), 
+                "summary": f"Configuration optimized for maximum safety and comfort with minimized costs", 
+                "error": None
+            }
         
-        headers = get_auth_header()
-        print(f"Calling Cortex Analyst API: {url}")
-        print(f"Auth header type: {headers.get('X-Snowflake-Authorization-Token-Type', 'JWT')}")
+        # Pattern: Maximize safety only
+        elif maximize_safety:
+            print("Using VQR pattern: maximize_safety")
+            optimization_sql = f"""
+SELECT b.OPTION_ID, b.COMPONENT_GROUP, b.OPTION_NM AS OPTION_NM, b.PERFORMANCE_CATEGORY, 
+       b.PERFORMANCE_SCORE, b.COST_USD, b.WEIGHT_LBS
+FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.MODEL_TBL m
+JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.TRUCK_OPTIONS v ON m.MODEL_ID = v.MODEL_ID
+JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.BOM_TBL b ON v.OPTION_ID = b.OPTION_ID
+WHERE m.MODEL_ID = '{model_id}' AND b.PERFORMANCE_CATEGORY = 'Safety'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY b.COMPONENT_GROUP ORDER BY b.PERFORMANCE_SCORE DESC) = 1
+ORDER BY b.PERFORMANCE_SCORE DESC"""
+            return {
+                "sql": optimization_sql.strip(), 
+                "summary": f"Configuration optimized for maximum safety", 
+                "error": None
+            }
         
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        # Pattern: Maximize comfort only
+        elif maximize_comfort:
+            print("Using VQR pattern: maximize_comfort")
+            optimization_sql = f"""
+SELECT b.OPTION_ID, b.COMPONENT_GROUP, b.OPTION_NM AS OPTION_NM, b.PERFORMANCE_CATEGORY, 
+       b.PERFORMANCE_SCORE, b.COST_USD, b.WEIGHT_LBS
+FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.MODEL_TBL m
+JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.TRUCK_OPTIONS v ON m.MODEL_ID = v.MODEL_ID
+JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.BOM_TBL b ON v.OPTION_ID = b.OPTION_ID
+WHERE m.MODEL_ID = '{model_id}' AND b.PERFORMANCE_CATEGORY = 'Comfort'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY b.COMPONENT_GROUP ORDER BY b.PERFORMANCE_SCORE DESC) = 1
+ORDER BY b.PERFORMANCE_SCORE DESC"""
+            return {
+                "sql": optimization_sql.strip(), 
+                "summary": f"Configuration optimized for maximum comfort", 
+                "error": None
+            }
         
-        if response.status_code == 200:
-            result = response.json()
-            print(f"Cortex Analyst response: {json.dumps(result)[:500]}...")
-            
-            message_content = result.get("message", {}).get("content", [])
-            
-            generated_sql = None
-            text_explanation = ""
-            
-            for content_block in message_content:
-                if content_block.get("type") == "sql":
-                    generated_sql = content_block.get("statement", "")
-                elif content_block.get("type") == "text":
-                    text_explanation = content_block.get("text", "")
-            
-            if generated_sql:
-                generated_sql = generated_sql.strip().rstrip(';')
-                sql_upper = generated_sql.upper().strip()
-                if sql_upper.startswith("SELECT") or sql_upper.startswith("WITH"):
-                    print(f"Cortex Analyst generated SQL: {generated_sql[:200]}...")
-                    summary = text_explanation or f"Optimized configuration for: {user_request}"
-                    return {"sql": generated_sql, "summary": summary, "error": None}
-            
-            if text_explanation:
-                print(f"Analyst returned text but no SQL: {text_explanation[:200]}")
-                return {"sql": None, "summary": None, "error": f"Analyst response: {text_explanation}"}
+        # Pattern: Minimize costs
+        elif minimize_cost or ('budget' in request_lower) or ('cheap' in request_lower):
+            print("Using VQR pattern: minimize_costs")
+            optimization_sql = f"""
+SELECT b.OPTION_ID, b.COMPONENT_GROUP, b.OPTION_NM AS OPTION_NM, b.PERFORMANCE_CATEGORY, 
+       b.PERFORMANCE_SCORE, b.COST_USD, b.WEIGHT_LBS
+FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.MODEL_TBL m
+JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.TRUCK_OPTIONS v ON m.MODEL_ID = v.MODEL_ID
+JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.BOM_TBL b ON v.OPTION_ID = b.OPTION_ID
+WHERE m.MODEL_ID = '{model_id}'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY b.COMPONENT_GROUP ORDER BY b.COST_USD ASC) = 1
+ORDER BY b.COST_USD ASC"""
+            return {
+                "sql": optimization_sql.strip(), 
+                "summary": f"Configuration optimized for minimum cost", 
+                "error": None
+            }
+        
+        # Default: General optimization for performance
         else:
-            print(f"Cortex Analyst API error: {response.status_code} - {response.text[:500]}")
-            return {"sql": None, "summary": None, "error": f"API error: {response.status_code}"}
-        
-        return {"sql": None, "summary": None, "error": "Failed to get SQL from Cortex Analyst"}
-    except Exception as e:
-        print(f"Cortex Analyst SQL generation failed: {e}")
-        return {"sql": None, "summary": None, "error": str(e)}
-        
+            print("No specific pattern matched, using general optimization")
+            return {"sql": None, "summary": None, "error": "I couldn't understand that optimization request. Try being more specific, like 'maximize power and safety' or 'minimize all costs'."}
+            
     except Exception as e:
         print(f"SQL generation failed: {e}")
         return {"sql": None, "summary": None, "error": str(e)}

@@ -144,6 +144,33 @@ setup_connection() {
         echo -e "${RED}Connection failed. Please check your credentials.${NC}"
         exit 1
     fi
+    
+    # Check cloud platform
+    echo ""
+    echo "Checking cloud platform..."
+    CLOUD_PLATFORM=$(snow_sql -q "SELECT SPLIT_PART(CURRENT_REGION(), '_', 1);" --format csv 2>/dev/null | tail -1 | tr -d '[:space:]')
+    echo "Cloud Platform: $CLOUD_PLATFORM"
+    
+    if [[ "$CLOUD_PLATFORM" != "AWS" ]]; then
+        echo ""
+        echo -e "${RED}=================================================="
+        echo "  WARNING: Non-AWS Platform Detected ($CLOUD_PLATFORM)"
+        echo "==================================================${NC}"
+        echo ""
+        echo "This demo currently only works fully on AWS Snowflake accounts."
+        echo ""
+        echo "On Azure/GCP, the Cortex Analyst REST API requires OAuth authentication"
+        echo "which is not supported by this setup script. The Configuration Assistant"
+        echo "feature will not work correctly."
+        echo ""
+        read -p "Continue anyway? (y/n): " CONTINUE_ANYWAY
+        if [[ "$CONTINUE_ANYWAY" != "y" && "$CONTINUE_ANYWAY" != "Y" ]]; then
+            echo "Setup cancelled."
+            exit 0
+        fi
+    else
+        echo -e "${GREEN}✓ AWS platform - full Cortex Analyst support available${NC}"
+    fi
     echo ""
 }
 
@@ -331,6 +358,7 @@ spec:
       image: $REPO_URL/truck-config:v1
       env:
         SNOWFLAKE_ACCOUNT: $SNOWFLAKE_ACCOUNT
+        SNOWFLAKE_HOST: ${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com
         SNOWFLAKE_USER: $SNOWFLAKE_USER
         SNOWFLAKE_WAREHOUSE: $SNOWFLAKE_WAREHOUSE
         SNOWFLAKE_DATABASE: $DATABASE

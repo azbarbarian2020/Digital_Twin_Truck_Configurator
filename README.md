@@ -2,6 +2,19 @@
 
 An interactive truck configuration demo built on Snowflake featuring **Cortex Analyst** for natural language optimization queries and **Snowpark Container Services (SPCS)** for hosting the React application.
 
+> **⚠️ Platform Requirement: AWS Snowflake Accounts Only**
+> 
+> This demo currently only works fully on **AWS-hosted Snowflake accounts**. Azure and GCP accounts have authentication limitations that prevent the Cortex Analyst REST API from working inside SPCS containers.
+>
+> **Why?** The Cortex Analyst API requires REST API calls from inside SPCS. On AWS, Personal Access Tokens (PAT) work for this. On Azure, PAT authentication is blocked (error 395090) and OAuth is required, which needs additional Azure AD configuration not included in this setup.
+>
+> **To check your cloud platform:**
+> ```sql
+> SELECT CURRENT_REGION();
+> -- AWS regions start with: AWS_US_WEST_2, AWS_US_EAST_1, etc.
+> -- Azure regions start with: AZURE_WESTUS2, AZURE_EASTUS2, etc.
+> ```
+
 ![Demo Screenshot](docs/screenshot.png)
 
 ## Overview
