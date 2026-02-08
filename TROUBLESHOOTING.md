@@ -165,21 +165,36 @@ This file should proxy DELETE requests to the backend.
 
 ## Data Issues
 
+### Validation Always Returns "Valid" (Even When Wrong)
+
+**Symptom**: Verify Configuration always says configuration is valid, even when components don't meet requirements
+
+**Cause**: `SPECS` column in `BOM_TBL` is NULL - the validation has no specification data to check against
+
+**Diagnosis**:
+```sql
+-- Check SPECS data - look for "? Spec not found" messages in logs
+SELECT COUNT(*) FROM BOM.TRUCK_CONFIG.BOM_TBL WHERE SPECS IS NOT NULL;
+-- Should return 253
+
+-- If 0, the SPECS data is missing
+```
+
+**Solution**:
+```sql
+-- Re-run the SPECS data script
+-- This loads 253 component specifications needed for validation
+-- Example: Turbocharger SPECS include boost_psi, max_hp_supported
+-- Run scripts/02c_specs_data.sql
+```
+
 ### Empty Tooltips on Components
 
 **Symptom**: Hovering over components shows no specification tooltips
 
-**Cause**: `SPECS` column in `BOM_TBL` is NULL
+**Cause**: Same as above - `SPECS` column in `BOM_TBL` is NULL
 
-**Solution**:
-```sql
--- Check SPECS data
-SELECT COUNT(*) FROM BOM.TRUCK_CONFIG.BOM_TBL WHERE SPECS IS NOT NULL;
--- Should return 253
-
--- If 0, reload the BOM data
--- Re-run scripts/02b_bom_data.sql
-```
+**Solution**: Run `scripts/02c_specs_data.sql`
 
 ### Missing Truck Options
 

@@ -261,7 +261,7 @@ load_data() {
     echo -e "${YELLOW}Step 2/8: Loading data...${NC}"
     
     # Create backup and update scripts with user's database/schema
-    for script in scripts/02_data.sql scripts/02b_bom_data.sql scripts/02c_truck_options.sql scripts/03_semantic_view.sql scripts/04_additional_objects.sql; do
+    for script in scripts/02_data.sql scripts/02b_bom_data.sql scripts/02c_specs_data.sql scripts/02c_truck_options.sql scripts/03_semantic_view.sql scripts/04_additional_objects.sql; do
         if [[ -f "$script" ]]; then
             cp "$script" "${script}.bak" 2>/dev/null || true
             sed -i.tmp "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" "$script"
@@ -274,7 +274,10 @@ load_data() {
     echo "  ✓ Tables and models loaded"
     
     snow_sql -f scripts/02b_bom_data.sql
-    echo "  ✓ BOM data loaded (253 parts with specifications)"
+    echo "  ✓ BOM data loaded"
+    
+    snow_sql -f scripts/02c_specs_data.sql
+    echo "  ✓ SPECS data loaded (253 component specifications for validation)"
     
     snow_sql -f scripts/02c_truck_options.sql
     echo "  ✓ Truck options loaded (868 mappings)"
