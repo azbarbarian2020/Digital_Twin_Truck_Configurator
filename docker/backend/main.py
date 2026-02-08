@@ -57,6 +57,8 @@ def generate_jwt_token() -> str:
     if not private_key_pem:
         raise ValueError("SNOWFLAKE_PRIVATE_KEY not set")
     
+    # Handle escaped newlines from environment variables (common in secrets)
+    private_key_pem = private_key_pem.replace('\\n', '\n')
     if "-----BEGIN" not in private_key_pem:
         private_key_pem = f"-----BEGIN PRIVATE KEY-----\n{private_key_pem}\n-----END PRIVATE KEY-----"
     
@@ -147,6 +149,8 @@ def get_connection():
     
     if private_key_pem:
         print("Connecting with Key-Pair authentication")
+        # Handle escaped newlines from environment variables (common in secrets)
+        private_key_pem = private_key_pem.replace('\\n', '\n')
         if "-----BEGIN" not in private_key_pem:
             private_key_pem = f"-----BEGIN PRIVATE KEY-----\n{private_key_pem}\n-----END PRIVATE KEY-----"
         _connection = snowflake.connector.connect(
@@ -212,6 +216,56 @@ def get_cortex_agent_path() -> str:
     return f"{SNOWFLAKE_DATABASE}/schemas/{SNOWFLAKE_SCHEMA}/agents/TRUCK_CONFIG_AGENT_V2"
 
 # ============ CORTEX AI FUNCTIONS ============
+
+def call_cortex_analyst_rest(question: str, model_id: str) -> Dict[str, Any]:
+    """Call Cortex Analyst REST API to generate SQL for optimization queries.
+    
+    This is the proper way to use Cortex Analyst - via REST API with PAT auth.
+    Returns: {"sql": str or None, "response": str, "error": str or None}
+    """
+    try:
+        semantic_view = get_semantic_view()
+        url = f"https://{SNOWFLAKE_HOST}/api/v2/cortex/analyst/message"
+        
+        # Build enhanced question with model context
+        enhanced_question = f"For truck MODEL_ID = '{model_id}': {question}. Return OPTION_ID, OPTION_NM, COMPONENT_GROUP, COST_USD, WEIGHT_LBS, PERFORMANCE_CATEGORY, PERFORMANCE_SCORE."
+        
+        request_body = {
+            "messages": [{"role": "user", "content": [{"type": "text", "text": enhanced_question}]}],
+            "semantic_view": semantic_view
+        }
+        
+        print(f"=== CORTEX ANALYST REST API ===")
+        print(f"URL: {url}")
+        print(f"Semantic View: {semantic_view}")
+        print(f"Question: {enhanced_question[:200]}...")
+        
+        headers = get_auth_header()
+        response = requests.post(url, json=request_body, headers=headers, timeout=60)
+        
+        if not response.ok:
+            error_text = response.text
+            print(f"Cortex Analyst error {response.status_code}: {error_text[:500]}")
+            return {"sql": None, "response": f"Cortex Analyst error: {error_text[:200]}", "error": error_text}
+        
+        data = response.json()
+        
+        sql = None
+        response_text = ""
+        
+        if data.get("message", {}).get("content"):
+            for item in data["message"]["content"]:
+                if item.get("type") == "sql":
+                    sql = item.get("statement")
+                elif item.get("type") == "text":
+                    response_text = item.get("text", "")
+        
+        print(f"Analyst returned SQL: {'Yes' if sql else 'No'}, Text: {response_text[:100]}...")
+        return {"sql": sql, "response": response_text, "error": None}
+        
+    except Exception as e:
+        print(f"Cortex Analyst REST API error: {e}")
+        return {"sql": None, "response": str(e), "error": str(e)}
 
 def optimize_via_sql(model_id: str, categories_to_maximize: List[str], minimize_cost: bool) -> Dict[str, Any]:
     """Use direct SQL for optimization - bypasses REST API auth issues"""
@@ -721,10 +775,10 @@ def chat(req: ChatRequest):
         is_optimization = any(kw in lower_msg for kw in ['maximize', 'minimize', 'optimize', 'best', 'cheapest', 'lightest', 'lightweight', 'recommend', 'performance', 'all categories'])
         
         if is_optimization:
-            # Use AI to understand and generate SQL
-            print("Using Cortex AI to generate optimization SQL...")
+            # Use Cortex Analyst REST API to generate intelligent SQL
+            print("Calling Cortex Analyst REST API for optimization...")
             
-            ai_result = generate_optimization_sql_with_ai(message, model_id)
+            ai_result = call_cortex_analyst_rest(message, model_id)
             
             if ai_result.get("sql"):
                 try:
@@ -782,6 +836,10 @@ def chat(req: ChatRequest):
                             }
                 except Exception as e:
                     print(f"AI-generated SQL execution failed: {e}")
+            
+            # If Cortex Analyst returned a text response (no SQL), show it
+            if ai_result.get("response"):
+                return {"response": ai_result["response"]}
             
             # If AI fails, provide helpful message
             return {"response": f"I understood your request: '{message}'. However, I couldn't generate a valid optimization. Try being more specific, like 'maximize power and safety' or 'minimize all costs'."}

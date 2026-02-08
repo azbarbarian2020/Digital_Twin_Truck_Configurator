@@ -1,6 +1,13 @@
 #!/bin/bash
 # Digital Twin Truck Configurator - Automated Setup Script
-# This script helps you deploy the demo to your Snowflake account
+# Deploys the demo to any AWS Snowflake account
+#
+# IMPORTANT NOTES (learned from production deployments):
+# 1. SPCS OAuth tokens only work for SQL connections, NOT REST APIs
+# 2. PAT is required for Cortex Analyst REST API calls
+# 3. Key-pair auth is required for PUT commands (file uploads)
+# 4. networkPolicyConfig.allowInternetEgress is NOT enough - need EXTERNAL_ACCESS_INTEGRATIONS
+# 5. Secrets YAML must use snowflakeSecret.objectName + secretKeyRef syntax
 
 set -e
 
@@ -13,10 +20,18 @@ echo ""
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Global connection name
+# Global variables
 CONNECTION_NAME=""
+SNOWFLAKE_ACCOUNT=""
+SNOWFLAKE_USER=""
+SNOWFLAKE_WAREHOUSE=""
+DATABASE=""
+SCHEMA=""
+COMPUTE_POOL=""
+REPO_URL=""
 
 # Helper function to run snow sql with correct connection
 snow_sql() {
@@ -24,17 +39,6 @@ snow_sql() {
         snow sql --connection "$CONNECTION_NAME" "$@"
     else
         snow sql "$@"
-    fi
-}
-
-# Helper function for snow spcs commands
-snow_spcs() {
-    local subcmd="$1"
-    shift
-    if [[ -n "$CONNECTION_NAME" ]]; then
-        snow spcs $subcmd --connection "$CONNECTION_NAME" "$@"
-    else
-        snow spcs $subcmd "$@"
     fi
 }
 
@@ -52,7 +56,18 @@ check_prereqs() {
         exit 1
     fi
     
-    echo -e "${GREEN}✓ Prerequisites satisfied${NC}"
+    if ! command -v openssl &> /dev/null; then
+        echo -e "${RED}Error: 'openssl' not found. Required for key-pair generation.${NC}"
+        exit 1
+    fi
+    
+    # Check Docker is running
+    if ! docker info &> /dev/null; then
+        echo -e "${RED}Error: Docker is not running. Please start Docker Desktop.${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ All prerequisites satisfied${NC}"
     echo ""
 }
 
@@ -70,37 +85,25 @@ setup_connection() {
     read -p "Use existing connection? Enter name (or press Enter to create new): " EXISTING_CONN
     
     if [[ -n "$EXISTING_CONN" ]]; then
-        # Use existing connection
         CONNECTION_NAME="$EXISTING_CONN"
         echo -e "${GREEN}Using existing connection: $CONNECTION_NAME${NC}"
         
-        # Extract account and user from connection
-        SNOWFLAKE_ACCOUNT=$(snow connection list --format json 2>/dev/null | grep -A5 "\"$CONNECTION_NAME\"" | grep -o '"account": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
-        SNOWFLAKE_USER=$(snow connection list --format json 2>/dev/null | grep -A5 "\"$CONNECTION_NAME\"" | grep -o '"user": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "")
-        
-        # If we couldn't extract, ask
-        if [[ -z "$SNOWFLAKE_ACCOUNT" ]]; then
-            read -p "Snowflake Account (for service config): " SNOWFLAKE_ACCOUNT
-        fi
-        if [[ -z "$SNOWFLAKE_USER" ]]; then
-            read -p "Snowflake Username (for service config): " SNOWFLAKE_USER
-        fi
+        # Try to extract account info from connection test
+        read -p "Snowflake Account (e.g., MYORG-MYACCOUNT): " SNOWFLAKE_ACCOUNT
+        read -p "Snowflake Username: " SNOWFLAKE_USER
     else
-        # Create new connection
         read -p "Snowflake Account (e.g., MYORG-MYACCOUNT): " SNOWFLAKE_ACCOUNT
         read -p "Snowflake Username: " SNOWFLAKE_USER
         
-        # Create connection name from account (lowercase, replace - with _)
         CONN_NAME=$(echo "$SNOWFLAKE_ACCOUNT" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
         
-        # Check if connection already exists with this name
         if snow connection list 2>/dev/null | grep -q "$CONN_NAME"; then
             echo -e "${GREEN}Found existing connection: $CONN_NAME${NC}"
             CONNECTION_NAME="$CONN_NAME"
         else
             echo ""
             echo "Authentication method:"
-            echo "  1) Browser-based SSO (externalbrowser)"
+            echo "  1) Browser-based SSO (externalbrowser) - Recommended"
             echo "  2) Personal Access Token (PAT)"
             read -p "Choose [1/2]: " AUTH_CHOICE
             
@@ -110,7 +113,6 @@ setup_connection() {
             if [[ "$AUTH_CHOICE" == "2" ]]; then
                 read -p "Enter your PAT: " -s CONNECTION_PAT
                 echo ""
-                # Save PAT to a temp file for the connection
                 TOKEN_FILE="$HOME/.snowflake/${CONN_NAME}_token"
                 mkdir -p "$HOME/.snowflake"
                 echo "$CONNECTION_PAT" > "$TOKEN_FILE"
@@ -135,7 +137,7 @@ setup_connection() {
         fi
     fi
     
-    # Test the connection
+    # Test connection
     echo ""
     echo "Testing connection..."
     if snow connection test --connection "$CONNECTION_NAME"; then
@@ -157,11 +159,11 @@ setup_connection() {
         echo "  WARNING: Non-AWS Platform Detected ($CLOUD_PLATFORM)"
         echo "==================================================${NC}"
         echo ""
-        echo "This demo currently only works fully on AWS Snowflake accounts."
+        echo "This demo requires an AWS Snowflake account."
         echo ""
         echo "On Azure/GCP, the Cortex Analyst REST API requires OAuth authentication"
-        echo "which is not supported by this setup script. The Configuration Assistant"
-        echo "feature will not work correctly."
+        echo "which is blocked for PAT tokens (error 395090). The Configuration Assistant"
+        echo "feature will NOT work."
         echo ""
         read -p "Continue anyway? (y/n): " CONTINUE_ANYWAY
         if [[ "$CONTINUE_ANYWAY" != "y" && "$CONTINUE_ANYWAY" != "Y" ]]; then
@@ -176,7 +178,9 @@ setup_connection() {
 
 # Gather configuration
 gather_config() {
-    echo "Deployment Configuration (press Enter to accept defaults):"
+    echo "Deployment Configuration"
+    echo "------------------------"
+    echo "(Press Enter to accept defaults)"
     echo ""
     
     read -p "Snowflake Warehouse [COMPUTE_WH]: " SNOWFLAKE_WAREHOUSE
@@ -192,7 +196,7 @@ gather_config() {
     COMPUTE_POOL=${COMPUTE_POOL:-TRUCK_CONFIG_POOL}
     
     echo ""
-    echo "Configuration Summary:"
+    echo -e "${BLUE}Configuration Summary:${NC}"
     echo "  Connection:   $CONNECTION_NAME"
     echo "  Account:      $SNOWFLAKE_ACCOUNT"
     echo "  User:         $SNOWFLAKE_USER"
@@ -209,13 +213,15 @@ gather_config() {
     fi
 }
 
-# Create database and schema
+# Create database, schema, and infrastructure
 setup_infrastructure() {
     echo ""
-    echo -e "${YELLOW}Step 1: Creating infrastructure...${NC}"
+    echo -e "${YELLOW}Step 1/8: Creating infrastructure...${NC}"
     
     snow_sql -q "CREATE DATABASE IF NOT EXISTS $DATABASE;"
     snow_sql -q "CREATE SCHEMA IF NOT EXISTS $DATABASE.$SCHEMA;"
+    snow_sql -q "USE DATABASE $DATABASE;"
+    snow_sql -q "USE SCHEMA $SCHEMA;"
     
     # Create compute pool
     echo "Creating compute pool..."
@@ -224,18 +230,21 @@ setup_infrastructure() {
         MAX_NODES = 1
         INSTANCE_FAMILY = CPU_X64_XS
         AUTO_RESUME = TRUE
-        AUTO_SUSPEND_SECS = 3600;" || echo "Compute pool may already exist"
+        AUTO_SUSPEND_SECS = 3600;" 2>/dev/null || echo "  (compute pool may already exist)"
     
     # Create image repository
     echo "Creating image repository..."
     snow_sql -q "CREATE IMAGE REPOSITORY IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIG_REPO;"
     
     # Get repository URL
-    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
-    echo -e "${GREEN}Image Repository URL: $REPO_URL${NC}"
+    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json 2>/dev/null | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
+    echo -e "${GREEN}  Image Repository: $REPO_URL${NC}"
     
-    # Create network rule and external access (use fully qualified names)
+    # Create network rule for external access (CRITICAL for REST APIs)
     echo "Creating external access integration..."
+    echo -e "${BLUE}  Note: networkPolicyConfig.allowInternetEgress alone is NOT sufficient"
+    echo "        EXTERNAL_ACCESS_INTEGRATIONS is required for Cortex Analyst REST API${NC}"
+    
     snow_sql -q "CREATE OR REPLACE NETWORK RULE $DATABASE.$SCHEMA.CORTEX_API_RULE
         TYPE = HOST_PORT
         MODE = EGRESS
@@ -251,18 +260,26 @@ setup_infrastructure() {
 # Load data
 load_data() {
     echo ""
-    echo -e "${YELLOW}Step 2: Loading data...${NC}"
+    echo -e "${YELLOW}Step 2/8: Loading data...${NC}"
     
-    # Update ALL scripts with user's database and schema
+    # Create backup and update scripts with user's database/schema
     for script in scripts/02_data.sql scripts/02b_bom_data.sql scripts/02c_truck_options.sql scripts/03_semantic_view.sql scripts/04_additional_objects.sql; do
         if [[ -f "$script" ]]; then
-            sed -i.bak "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" "$script"
+            cp "$script" "${script}.bak" 2>/dev/null || true
+            sed -i.tmp "s/BOM\.BOM4/$DATABASE.$SCHEMA/g" "$script"
+            sed -i.tmp "s/BOM\.TRUCK_CONFIG/$DATABASE.$SCHEMA/g" "$script"
+            rm -f "${script}.tmp"
         fi
     done
     
     snow_sql -f scripts/02_data.sql
+    echo "  ✓ Tables and models loaded"
+    
     snow_sql -f scripts/02b_bom_data.sql
+    echo "  ✓ BOM data loaded (253 parts with specifications)"
+    
     snow_sql -f scripts/02c_truck_options.sql
+    echo "  ✓ Truck options loaded (868 mappings)"
     
     echo -e "${GREEN}✓ Data loaded${NC}"
 }
@@ -270,84 +287,141 @@ load_data() {
 # Create semantic view
 create_semantic_view() {
     echo ""
-    echo -e "${YELLOW}Step 3: Creating semantic view...${NC}"
+    echo -e "${YELLOW}Step 3/8: Creating semantic view...${NC}"
     
     snow_sql -f scripts/03_semantic_view.sql
     
-    echo -e "${GREEN}✓ Semantic view created${NC}"
+    echo -e "${GREEN}✓ Semantic view TRUCK_CONFIG_ANALYST_V2 created${NC}"
 }
 
-# Create additional objects (stages, Cortex Search, etc.)
+# Create additional objects (stages, Cortex Search)
 create_additional_objects() {
     echo ""
-    echo -e "${YELLOW}Step 4: Creating additional objects (stages, Cortex Search)...${NC}"
+    echo -e "${YELLOW}Step 4/8: Creating stages and Cortex Search...${NC}"
     
-    # Update warehouse reference in script
-    sed -i.bak "s/WAREHOUSE = DEMO_WH/WAREHOUSE = $SNOWFLAKE_WAREHOUSE/g" scripts/04_additional_objects.sql
+    # Update warehouse in script
+    sed -i.tmp "s/WAREHOUSE = DEMO_WH/WAREHOUSE = $SNOWFLAKE_WAREHOUSE/g" scripts/04_additional_objects.sql
+    sed -i.tmp "s/WAREHOUSE = COMPUTE_WH/WAREHOUSE = $SNOWFLAKE_WAREHOUSE/g" scripts/04_additional_objects.sql
+    rm -f scripts/04_additional_objects.sql.tmp
     
     snow_sql -f scripts/04_additional_objects.sql
     
+    echo -e "${BLUE}  Note: Stage uses SNOWFLAKE_SSE encryption (required for PARSE_DOCUMENT)${NC}"
     echo -e "${GREEN}✓ Additional objects created${NC}"
 }
 
-# Setup PAT secret for the app
+# Setup authentication secrets
 setup_secrets() {
     echo ""
-    echo -e "${YELLOW}Step 5: Setting up app authentication...${NC}"
+    echo -e "${YELLOW}Step 5/8: Setting up authentication secrets...${NC}"
     echo ""
-    echo "The app needs a Personal Access Token (PAT) to call Cortex Analyst."
-    echo "Create one at: Snowsight → Profile → Security → Personal Access Tokens"
+    
+    # ========================================
+    # PAT Secret (for Cortex Analyst REST API)
+    # ========================================
+    echo -e "${BLUE}PAT Secret Setup${NC}"
+    echo "The app needs a Personal Access Token (PAT) to call Cortex Analyst REST API."
+    echo "SPCS OAuth tokens only work for SQL connections, NOT for REST API calls."
     echo ""
-    read -p "Enter your PAT (or press Enter to skip for now): " PAT_TOKEN
+    echo "Create a PAT at: Snowsight → Profile → Security → Personal Access Tokens"
+    echo ""
+    read -p "Enter your PAT (or press Enter to skip): " -s PAT_TOKEN
+    echo ""
     
     if [[ -n "$PAT_TOKEN" ]]; then
         snow_sql -q "CREATE OR REPLACE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET
             TYPE = GENERIC_STRING
             SECRET_STRING = '$PAT_TOKEN';"
-        echo -e "${GREEN}✓ PAT secret created${NC}"
+        echo -e "${GREEN}  ✓ PAT secret created${NC}"
     else
-        echo -e "${YELLOW}⚠ Skipped PAT setup - you'll need to create the secret manually${NC}"
-        echo "Run: CREATE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET TYPE = GENERIC_STRING SECRET_STRING = '<your-pat>';"
+        echo -e "${YELLOW}  ⚠ Skipped - Configuration Assistant will not work without PAT${NC}"
+        echo "  Create manually later:"
+        echo "  CREATE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET TYPE=GENERIC_STRING SECRET_STRING='<PAT>';"
+    fi
+    
+    # ========================================
+    # Key-Pair Secret (for PUT commands/uploads)
+    # ========================================
+    echo ""
+    echo -e "${BLUE}Key-Pair Authentication Setup${NC}"
+    echo "Required for file uploads (PUT commands) in SPCS."
+    echo "PAT authentication does NOT support PUT commands to stages."
+    echo ""
+    
+    read -p "Generate key-pair automatically? (y/n) [y]: " GEN_KEYPAIR
+    GEN_KEYPAIR=${GEN_KEYPAIR:-y}
+    
+    if [[ "$GEN_KEYPAIR" == "y" || "$GEN_KEYPAIR" == "Y" ]]; then
+        TEMP_KEY_DIR=$(mktemp -d)
+        
+        echo "  Generating RSA key pair..."
+        openssl genrsa 2048 2>/dev/null | openssl pkcs8 -topk8 -inform PEM -out "$TEMP_KEY_DIR/key.p8" -nocrypt 2>/dev/null
+        openssl rsa -in "$TEMP_KEY_DIR/key.p8" -pubout -out "$TEMP_KEY_DIR/key.pub" 2>/dev/null
+        
+        # Get public key without headers for user assignment
+        PUBLIC_KEY=$(grep -v "BEGIN\|END" "$TEMP_KEY_DIR/key.pub" | tr -d '\n')
+        
+        # Assign to user
+        echo "  Assigning public key to user $SNOWFLAKE_USER..."
+        snow_sql -q "ALTER USER $SNOWFLAKE_USER SET RSA_PUBLIC_KEY='$PUBLIC_KEY';"
+        
+        # Store private key with escaped newlines (CRITICAL for SPCS secrets)
+        echo "  Creating private key secret..."
+        PRIVATE_KEY_ESCAPED=$(awk '{printf "%s\\n", $0}' "$TEMP_KEY_DIR/key.p8")
+        snow_sql -q "CREATE OR REPLACE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PRIVATE_KEY_SECRET
+            TYPE = GENERIC_STRING
+            SECRET_STRING = '$PRIVATE_KEY_ESCAPED';"
+        
+        rm -rf "$TEMP_KEY_DIR"
+        echo -e "${GREEN}  ✓ Key-pair authentication configured${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Skipped - File uploads will not work${NC}"
+        echo "  To configure manually:"
+        echo "  1. Generate key: openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out key.p8"
+        echo "  2. Get public: openssl rsa -in key.p8 -pubout"
+        echo "  3. ALTER USER $SNOWFLAKE_USER SET RSA_PUBLIC_KEY='<public_key>';"
+        echo "  4. CREATE SECRET ... SECRET_STRING='<private_key_with_escaped_newlines>';"
     fi
 }
 
 # Build and push Docker image
 build_docker() {
     echo ""
-    echo -e "${YELLOW}Step 6: Building Docker image...${NC}"
+    echo -e "${YELLOW}Step 6/8: Building Docker image...${NC}"
     
-    # Login to Snowflake registry
-    echo "Logging into Snowflake image registry..."
-    if [[ -n "$CONNECTION_NAME" ]]; then
-        snow spcs image-registry login --connection "$CONNECTION_NAME"
-    else
-        snow spcs image-registry login
-    fi
+    # Login to registry
+    echo "  Logging into Snowflake image registry..."
+    snow spcs image-registry login --connection "$CONNECTION_NAME"
     
-    # Get repository URL
-    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
+    # Get fresh repo URL
+    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json 2>/dev/null | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
     
-    echo "Building Docker image (this may take a few minutes)..."
+    echo "  Building image (this takes 2-3 minutes)..."
     cd docker
-    docker buildx build --platform linux/amd64 -t truck-config:v1 .
+    docker buildx build --platform linux/amd64 -t truck-config:v1 . 2>&1 | tail -5
     
-    echo "Tagging image..."
+    echo "  Tagging for Snowflake registry..."
     docker tag truck-config:v1 "$REPO_URL/truck-config:v1"
     
-    echo "Pushing to Snowflake registry..."
-    docker push "$REPO_URL/truck-config:v1"
+    echo "  Pushing to registry..."
+    docker push "$REPO_URL/truck-config:v1" 2>&1 | tail -3
     
     cd ..
-    echo -e "${GREEN}✓ Docker image pushed to $REPO_URL/truck-config:v1${NC}"
+    echo -e "${GREEN}✓ Docker image pushed${NC}"
 }
 
-# Deploy service
+# Deploy SPCS service
 deploy_service() {
     echo ""
-    echo -e "${YELLOW}Step 7: Deploying SPCS service...${NC}"
+    echo -e "${YELLOW}Step 7/8: Deploying SPCS service...${NC}"
     
-    # Get repository URL
-    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
+    # Get repo URL
+    REPO_URL=$(snow_sql -q "SHOW IMAGE REPOSITORIES IN SCHEMA $DATABASE.$SCHEMA;" --format json 2>/dev/null | grep -o '"repository_url": "[^"]*"' | head -1 | cut -d'"' -f4)
+    
+    # Derive host from account
+    SNOWFLAKE_HOST="${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com"
+    
+    echo -e "${BLUE}  Note: Using correct secrets YAML syntax (snowflakeSecret.objectName + secretKeyRef)${NC}"
     
     snow_sql -q "CREATE SERVICE IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC
       IN COMPUTE POOL $COMPUTE_POOL
@@ -358,16 +432,21 @@ spec:
       image: $REPO_URL/truck-config:v1
       env:
         SNOWFLAKE_ACCOUNT: $SNOWFLAKE_ACCOUNT
-        SNOWFLAKE_HOST: ${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com
+        SNOWFLAKE_HOST: $SNOWFLAKE_HOST
         SNOWFLAKE_USER: $SNOWFLAKE_USER
         SNOWFLAKE_WAREHOUSE: $SNOWFLAKE_WAREHOUSE
         SNOWFLAKE_DATABASE: $DATABASE
         SNOWFLAKE_SCHEMA: $SCHEMA
         SNOWFLAKE_SEMANTIC_VIEW: $DATABASE.$SCHEMA.TRUCK_CONFIG_ANALYST_V2
       secrets:
-        - snowflakeSecret: $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET
+        - snowflakeSecret:
+            objectName: $DATABASE.$SCHEMA.SNOWFLAKE_PAT_SECRET
           secretKeyRef: secret_string
           envVarName: SNOWFLAKE_PAT
+        - snowflakeSecret:
+            objectName: $DATABASE.$SCHEMA.SNOWFLAKE_PRIVATE_KEY_SECRET
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY
       resources:
         requests:
           cpu: 0.5
@@ -376,8 +455,8 @@ spec:
           cpu: 2
           memory: 4Gi
   endpoints:
-    - name: web
-      port: 8080
+    - name: app
+      port: 3000
       public: true
   networkPolicyConfig:
     allowInternetEgress: true
@@ -387,43 +466,54 @@ MIN_INSTANCES = 1
 MAX_INSTANCES = 1;"
     
     echo ""
-    echo "Waiting for service to start (this may take 60-90 seconds)..."
-    sleep 30
+    echo "  Waiting for service to start (60-90 seconds)..."
+    sleep 45
     
     # Check status
-    STATUS=$(snow_sql -q "SELECT SYSTEM\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');" --format json | grep -o '"status": "[^"]*"' | head -1 | cut -d'"' -f4 || echo "PENDING")
+    STATUS=$(snow_sql -q "SELECT SYSTEM\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');" --format csv 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
     
-    if [[ "$STATUS" == *"RUNNING"* ]]; then
+    if [[ "$STATUS" == "READY" ]]; then
         echo -e "${GREEN}✓ Service is running!${NC}"
     else
-        echo -e "${YELLOW}Service status: $STATUS - may still be starting${NC}"
+        echo -e "${YELLOW}  Service status: $STATUS (may still be starting)${NC}"
     fi
 }
 
-# Get service URL
-get_service_url() {
+# Get service URL and finish
+finish_setup() {
     echo ""
-    echo -e "${YELLOW}Step 8: Getting service URL...${NC}"
+    echo -e "${YELLOW}Step 8/8: Getting service URL...${NC}"
     
     sleep 10
     
-    snow_sql -q "SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;"
+    # Get endpoint URL
+    ENDPOINT_URL=$(snow_sql -q "SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;" --format json 2>/dev/null | grep -o '"ingress_url": "[^"]*"' | head -1 | cut -d'"' -f4)
     
     echo ""
     echo -e "${GREEN}=================================================="
     echo "  Setup Complete!"
     echo "==================================================${NC}"
     echo ""
-    echo "Your Digital Twin Truck Configurator is deploying."
-    echo "Run this to check status:"
-    echo "  snow sql --connection $CONNECTION_NAME -q \"SELECT SYSTEM\\\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');\""
+    if [[ -n "$ENDPOINT_URL" ]]; then
+        echo -e "  ${GREEN}Application URL: $ENDPOINT_URL${NC}"
+    fi
     echo ""
-    echo "Run this to get the URL:"
-    echo "  snow sql --connection $CONNECTION_NAME -q \"SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;\""
+    echo "  Useful Commands:"
+    echo "  ----------------"
+    echo "  Check status:"
+    echo "    snow sql --connection $CONNECTION_NAME -q \"SELECT SYSTEM\\\$GET_SERVICE_STATUS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC');\""
+    echo ""
+    echo "  View logs:"
+    echo "    snow sql --connection $CONNECTION_NAME -q \"CALL SYSTEM\\\$GET_SERVICE_LOGS('$DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC', 0, 'truck-configurator', 100);\""
+    echo ""
+    echo "  Get URL:"
+    echo "    snow sql --connection $CONNECTION_NAME -q \"SHOW ENDPOINTS IN SERVICE $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC;\""
+    echo ""
+    echo -e "${BLUE}  Demo Tip: Upload demo_assets/605_HP_Engine_Requirements.pdf to test validation!${NC}"
     echo ""
 }
 
-# Main execution
+# Main
 main() {
     check_prereqs
     setup_connection
@@ -435,19 +525,21 @@ main() {
     setup_secrets
     
     echo ""
-    read -p "Build and push Docker image? (y/n): " BUILD_DOCKER
+    read -p "Build and deploy Docker image? (y/n) [y]: " BUILD_DOCKER
+    BUILD_DOCKER=${BUILD_DOCKER:-y}
+    
     if [[ "$BUILD_DOCKER" == "y" || "$BUILD_DOCKER" == "Y" ]]; then
         build_docker
         deploy_service
-        get_service_url
+        finish_setup
     else
         echo ""
         echo "To complete setup manually:"
-        echo "1. Build Docker: cd docker && docker buildx build --platform linux/amd64 -t truck-config:v1 ."
-        echo "2. Push to registry (get URL from SHOW IMAGE REPOSITORIES)"
-        echo "3. Create service using scripts/05_service.sql"
+        echo "1. cd docker && docker buildx build --platform linux/amd64 -t truck-config:v1 ."
+        echo "2. docker tag truck-config:v1 $REPO_URL/truck-config:v1"
+        echo "3. docker push $REPO_URL/truck-config:v1"
+        echo "4. snow sql --connection $CONNECTION_NAME -f scripts/05_service.sql"
     fi
 }
 
-# Run main
 main
