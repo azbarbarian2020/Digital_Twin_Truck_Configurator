@@ -220,8 +220,6 @@ setup_infrastructure() {
     
     snow_sql -q "CREATE DATABASE IF NOT EXISTS $DATABASE;"
     snow_sql -q "CREATE SCHEMA IF NOT EXISTS $DATABASE.$SCHEMA;"
-    snow_sql -q "USE DATABASE $DATABASE;"
-    snow_sql -q "USE SCHEMA $SCHEMA;"
     
     # Create compute pool
     echo "Creating compute pool..."
