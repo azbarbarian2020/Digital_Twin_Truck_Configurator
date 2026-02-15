@@ -24,12 +24,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SNOWFLAKE_ACCOUNT = os.getenv("SNOWFLAKE_ACCOUNT", "SFSENORTHAMERICA-AWSBARBARIAN")
-SNOWFLAKE_HOST = os.getenv("SNOWFLAKE_HOST", "sfsenorthamerica-awsbarbarian.snowflakecomputing.com")
+SNOWFLAKE_ACCOUNT = os.getenv("SNOWFLAKE_ACCOUNT", "")
+SNOWFLAKE_HOST = os.getenv("SNOWFLAKE_HOST", f"{SNOWFLAKE_ACCOUNT}.snowflakecomputing.com" if SNOWFLAKE_ACCOUNT else "")
 SNOWFLAKE_WAREHOUSE = os.getenv("SNOWFLAKE_WAREHOUSE", "DEMO_WH")
 SNOWFLAKE_DATABASE = os.getenv("SNOWFLAKE_DATABASE", "BOM")
-SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "BOM4")
-SNOWFLAKE_USER = os.getenv("SNOWFLAKE_USER", "Horizonadmin")
+SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "TRUCK_CONFIG")
+SNOWFLAKE_USER = os.getenv("SNOWFLAKE_USER", "")
 
 _connection = None
 _jwt_token = None

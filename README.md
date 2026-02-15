@@ -244,23 +244,33 @@ snow spcs service create TRUCK_CONFIGURATOR_SVC --spec-path spec.yaml -c your_co
 
 ## Engineering Specification Documents
 
-Two sample engineering specifications are included:
+Two sample engineering specifications are included in `sample-docs/` for easy access:
 
-| Document | Purpose |
-|----------|---------|
-| `deployment/docs/ENG-605-MAX-Technical-Specification.pdf` | Validates turbocharger, radiator, transmission for 605 HP engine |
-| `deployment/docs/Elite_Air_Ride_Suspension_Requirements.pdf` | Validates frame rails, axle ratings for Elite Air-Ride suspension |
+| Document | Attach To | Purpose |
+|----------|-----------|--------|
+| `ENG-605-MAX-Technical-Specification.pdf` | **Power Rating** component | Validates turbocharger, radiator, transmission for 605 HP engine |
+| `Elite_Air_Ride_Suspension_Requirements.pdf` | **Front Suspension Type** component | Validates frame rails, axle ratings for Air-Ride suspension |
 
-### Example Validation Flow
+### Example Validation Flow #1: High-Power Engine
 
 1. Navigate to **Engine > Engine Block > Power Rating**
 2. Select **605 HP / 2050 lb-ft Maximum** option
-3. Click **Attach Engineering Doc** icon
-4. Upload `ENG-605-MAX-Technical-Specification.pdf`
-5. AI extracts rules:
+3. Click the **📄 Attach Engineering Doc** icon next to the component
+4. Upload `sample-docs/ENG-605-MAX-Technical-Specification.pdf`
+5. AI extracts validation rules:
    - Turbocharger: `boost_psi >= 40`, `max_hp_supported >= 605`
    - Radiator: `cooling_capacity_btu >= 450000`
    - Transmission: `torque_rating_lb_ft >= 2050`
+6. Click **Verify Configuration** to validate current selections against rules
+7. View any mismatches and click **Apply Fix Plan** to auto-resolve
+
+### Example Validation Flow #2: Air-Ride Suspension
+
+1. Navigate to **Chassis > Front Axle > Front Suspension Type**
+2. Select **Air-Ride Front Suspension** or **Independent Air Suspension**
+3. Click the **📄 Attach Engineering Doc** icon
+4. Upload `sample-docs/Elite_Air_Ride_Suspension_Requirements.pdf`
+5. AI extracts rules for frame rails, axle weight ratings
 6. Click **Verify Configuration** to validate
 
 ## Data Model
@@ -324,13 +334,17 @@ truck-configurator/
 │   ├── Compare.tsx       # Config comparison
 │   ├── ChatPanel.tsx     # AI chat assistant
 │   └── ...
+├── sample-docs/            # Sample engineering spec PDFs (for demo)
+│   ├── ENG-605-MAX-Technical-Specification.pdf
+│   └── Elite_Air_Ride_Suspension_Requirements.pdf
 ├── deployment/
 │   ├── scripts/          # SQL deployment scripts
 │   │   ├── 01_setup_infrastructure.sql
 │   │   ├── 02_create_tables.sql
 │   │   ├── 03_load_data.sql
-│   │   └── 04_cortex_services.sql
-│   ├── docs/             # Sample engineering spec PDFs
+│   │   ├── 04_cortex_services.sql
+│   │   └── 05_semantic_view.sql
+│   ├── docs/             # Backup copy of sample PDFs
 │   └── setup.sh          # Automated deployment script
 ├── Dockerfile            # Multi-stage build (includes supervisord config)
 ├── nginx.conf            # Reverse proxy config

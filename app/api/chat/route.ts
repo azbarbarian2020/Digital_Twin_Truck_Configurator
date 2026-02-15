@@ -25,8 +25,8 @@ interface ChatResponse {
   applyAction?: ApplyAction;
 }
 
-const SNOWFLAKE_ACCOUNT = "sfsenorthamerica-awsbarbarian";
-const SNOWFLAKE_HOST = `${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com`;
+const SNOWFLAKE_ACCOUNT = process.env.SNOWFLAKE_ACCOUNT || "";
+const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || `${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com`;
 const PAT_TOKEN = process.env.SNOWFLAKE_PAT || "";
 
 function getAuthToken(): string {

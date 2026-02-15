@@ -229,6 +229,7 @@ setup_cortex() {
     
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     run_sql_file "$SCRIPT_DIR/scripts/04_cortex_services.sql" "Create Cortex Search service"
+    run_sql_file "$SCRIPT_DIR/scripts/05_semantic_view.sql" "Create Semantic View for Cortex Analyst"
     
     echo -e "${GREEN}Cortex services configured!${NC}"
 }

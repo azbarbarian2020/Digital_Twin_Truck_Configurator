@@ -165,7 +165,8 @@ function analyzeConfiguration(
 }
 
 async function callCortexComplete(prompt: string): Promise<string> {
-  const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || 'sjb01014.snowflakecomputing.com';
+  const SNOWFLAKE_ACCOUNT = process.env.SNOWFLAKE_ACCOUNT || '';
+  const SNOWFLAKE_HOST = process.env.SNOWFLAKE_HOST || `${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com`;
   const token = process.env.SNOWFLAKE_TOKEN;
   
   if (!token) {
