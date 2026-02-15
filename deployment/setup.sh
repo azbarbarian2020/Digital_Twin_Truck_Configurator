@@ -41,30 +41,54 @@ DEFAULT_POOL_NAME="TRUCK_CONFIG_POOL"
 setup_connection() {
     echo -e "${YELLOW}Step 1: Connection Setup${NC}"
     echo "----------------------------------------"
-    echo "Existing Snowflake connections:"
-    snow connection list 2>/dev/null || echo "  (none found)"
+    echo ""
+    echo "Available Snowflake connections:"
     echo ""
     
-    read -p "Use existing connection? Enter name (or press Enter to create new): " EXISTING_CONN
+    # Show connections in a cleaner format
+    CONN_LIST=$(snow connection list 2>/dev/null | grep -v "^+" | grep -v "connection_name" | grep "|" | awk -F'|' '{gsub(/^ +| +$/, "", $2); gsub(/^ +| +$/, "", $3); if($2 != "") print "  " NR ". " $2 " (" $3 ")"}')
+    
+    if [[ -z "$CONN_LIST" ]]; then
+        echo "  (no connections found - you'll need to create one)"
+        CREATE_NEW="y"
+    else
+        echo "$CONN_LIST"
+        echo ""
+        echo -e "${BLUE}Options:${NC}"
+        echo "  - Enter a connection name from above to use it"
+        echo "  - Press Enter to create a new connection"
+        echo ""
+        read -p "Connection name (or Enter for new): " EXISTING_CONN
+        CREATE_NEW=""
+    fi
     
     if [[ -n "$EXISTING_CONN" ]]; then
         CONNECTION_NAME="$EXISTING_CONN"
         echo -e "${GREEN}Using existing connection: $CONNECTION_NAME${NC}"
     else
         echo ""
-        echo "Creating new connection..."
-        read -p "Connection name: " CONN_NAME
-        read -p "Snowflake account (e.g., ORG-ACCOUNT): " SNOWFLAKE_ACCOUNT
+        echo -e "${BLUE}Creating new connection...${NC}"
+        echo ""
+        read -p "Connection name (e.g., my_account): " CONN_NAME
+        read -p "Snowflake account identifier (e.g., ORG-ACCOUNT): " SNOWFLAKE_ACCOUNT
         read -p "Username: " SNOWFLAKE_USER
         
         echo ""
         echo "Authentication method:"
-        echo "  1. Browser (externalbrowser) - Recommended"
-        echo "  2. PAT (Programmatic Access Token)"
-        read -p "Select (1-2): " AUTH_CHOICE
+        echo "  1. Browser SSO (externalbrowser) - Opens browser for login"
+        echo "  2. PAT (Programmatic Access Token) - Paste token directly"
+        echo ""
+        read -p "Select [1-2, default=2]: " AUTH_CHOICE
+        AUTH_CHOICE=${AUTH_CHOICE:-2}
         
         if [[ "$AUTH_CHOICE" == "2" ]]; then
-            read -sp "Enter PAT: " CONNECTION_PAT
+            echo ""
+            echo -e "${BLUE}To generate a PAT:${NC}"
+            echo "  1. Go to Snowsight > User Menu > Profile"
+            echo "  2. Click 'Programmatic Access Tokens'"
+            echo "  3. Generate token with ACCOUNTADMIN role"
+            echo ""
+            read -sp "Paste your PAT here: " CONNECTION_PAT
             echo ""
             TOKEN_FILE="$HOME/.snowflake/${CONN_NAME}_token"
             mkdir -p "$HOME/.snowflake"
@@ -87,6 +111,8 @@ setup_connection() {
                 --authenticator externalbrowser
         fi
         CONNECTION_NAME="$CONN_NAME"
+        echo ""
+        echo -e "${GREEN}Connection '$CONNECTION_NAME' created successfully!${NC}"
     fi
     
     # Test connection

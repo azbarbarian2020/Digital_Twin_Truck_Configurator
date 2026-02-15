@@ -57,10 +57,14 @@ This proof-of-concept demonstrates how Snowflake's unified data platform can rev
 │                                                                      │
 │  ┌──────────────────────────────────────────────────────────────────┐│
 │  │                         Data Layer                                ││
-│  │  ┌──────────┐  ┌───────────┐  ┌────────────┐  ┌───────────────┐ ││
-│  │  │ BOM_TBL  │  │ MODEL_TBL │  │ VALIDATION │  │ ENGINEERING   │ ││
-│  │  │(253 opts)│  │ (5 models)│  │   _RULES   │  │ DOCS_CHUNKED  │ ││
-│  │  └──────────┘  └───────────┘  └────────────┘  └───────────────┘ ││
+│  │  ┌──────────┐  ┌───────────┐  ┌──────────────┐  ┌─────────────┐ ││
+│  │  │ BOM_TBL  │  │ MODEL_TBL │  │TRUCK_OPTIONS │  │SAVED_CONFIGS│ ││
+│  │  │(253 opts)│  │ (5 models)│  │ (868 maps)   │  │             │ ││
+│  │  └──────────┘  └───────────┘  └──────────────┘  └─────────────┘ ││
+│  │  ┌──────────────┐  ┌───────────────┐  ┌────────────────────────┐││
+│  │  │VALIDATION    │  │ ENGINEERING   │  │ ENGINEERING_DOCS_STAGE │││
+│  │  │_RULES        │  │ DOCS_CHUNKED  │  │ (PDF uploads)          │││
+│  │  └──────────────┘  └───────────────┘  └────────────────────────┘││
 │  └──────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -87,21 +91,25 @@ The SPCS container runs three services orchestrated by supervisor:
 - Real-time summary shows total price, weight, and performance vs default
 
 ### 3. Configuration Assistant (30s)
+- Return to main screen and select the **Heavy Haul Max HH-1200** model
 - Open AI chat and ask: *"Maximize comfort and safety while minimizing all other costs"*
 - AI analyzes all 253 options and recommends optimal configuration
 - One-click "Apply" updates configuration instantly
 
 ### 4. Engineering Spec Validation (45s) - **KEY FEATURE**
-- Select a component (e.g., Engine or Turbocharger)
-- Upload engineering specification PDF
+- Navigate to **Engine > Engine Block > Power Rating**
+- Select **605 HP / 2050 lb-ft Maximum**
+- Click the **📄 Attach Engineering Doc** icon
+- Upload `sample-docs/605_HP_Engine_Requirements.pdf`
 - AI extracts validation rules from document text
-- Click "Verify Configuration" - AI compares spec requirements against selected components
-- View mismatches: *"Spec requires minimum 500 HP, selected engine provides 400 HP"*
-- Click "Apply Fix Plan" to auto-resolve issues
+- Click **Verify Configuration** - AI compares spec requirements against selected components
+- View configuration violations
+- Click **Apply Fix Plan** to auto-resolve issues
 
 ### 5. Save & Compare (25s)
 - Save configuration with AI-generated description
 - Compare multiple builds side-by-side
+- Export full configuration report to PDF
 - Export full configuration report to PDF
 
 ## Quick Start Deployment
@@ -248,7 +256,7 @@ Two sample engineering specifications are included in `sample-docs/` for easy ac
 
 | Document | Attach To | Purpose |
 |----------|-----------|--------|
-| `ENG-605-MAX-Technical-Specification.pdf` | **Power Rating** component | Validates turbocharger, radiator, transmission for 605 HP engine |
+| `605_HP_Engine_Requirements.pdf` | **Power Rating** component | Validates turbocharger, radiator, transmission for 605 HP engine |
 | `Elite_Air_Ride_Suspension_Requirements.pdf` | **Front Suspension Type** component | Validates frame rails, axle ratings for Air-Ride suspension |
 
 ### Example Validation Flow #1: High-Power Engine
@@ -256,7 +264,7 @@ Two sample engineering specifications are included in `sample-docs/` for easy ac
 1. Navigate to **Engine > Engine Block > Power Rating**
 2. Select **605 HP / 2050 lb-ft Maximum** option
 3. Click the **📄 Attach Engineering Doc** icon next to the component
-4. Upload `sample-docs/ENG-605-MAX-Technical-Specification.pdf`
+4. Upload `sample-docs/605_HP_Engine_Requirements.pdf`
 5. AI extracts validation rules:
    - Turbocharger: `boost_psi >= 40`, `max_hp_supported >= 605`
    - Radiator: `cooling_capacity_btu >= 450000`
