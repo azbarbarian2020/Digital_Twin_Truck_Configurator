@@ -187,7 +187,77 @@ deploy_infrastructure() {
 }
 
 # =============================================================================
-# STEP 4: CREATE TABLES
+# STEP 4: SETUP AUTHENTICATION SECRET
+# =============================================================================
+setup_auth_secret() {
+    echo ""
+    echo -e "${YELLOW}Step 4: Setup Authentication Secret${NC}"
+    echo "----------------------------------------"
+    echo ""
+    echo "The app requires a private key for Cortex REST API authentication."
+    echo "You can either provide an existing key or generate a new one."
+    echo ""
+    echo "Options:"
+    echo "  1. Generate new RSA key pair (recommended for new deployments)"
+    echo "  2. Provide path to existing private key file"
+    echo "  3. Skip (only basic features will work without Cortex APIs)"
+    echo ""
+    read -p "Select option (1-3): " AUTH_CHOICE
+    
+    case "$AUTH_CHOICE" in
+        1)
+            echo "Generating new RSA key pair..."
+            TEMP_DIR=$(mktemp -d)
+            openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out "$TEMP_DIR/rsa_key.p8" -nocrypt
+            openssl rsa -in "$TEMP_DIR/rsa_key.p8" -pubout -out "$TEMP_DIR/rsa_key.pub"
+            PRIVATE_KEY=$(cat "$TEMP_DIR/rsa_key.p8" | grep -v "BEGIN\|END" | tr -d '\n')
+            PUBLIC_KEY=$(cat "$TEMP_DIR/rsa_key.pub")
+            
+            echo ""
+            echo -e "${YELLOW}IMPORTANT: You must register this public key with your Snowflake user.${NC}"
+            echo ""
+            echo "Run this SQL as ACCOUNTADMIN (replace YOUR_USER with your username):"
+            echo ""
+            echo "ALTER USER YOUR_USER SET RSA_PUBLIC_KEY='$(cat "$TEMP_DIR/rsa_key.pub" | grep -v "BEGIN\|END" | tr -d '\n')';"
+            echo ""
+            read -p "Press Enter after you've registered the public key..."
+            
+            rm -rf "$TEMP_DIR"
+            ;;
+        2)
+            read -p "Path to private key file (.p8 format): " KEY_PATH
+            if [[ ! -f "$KEY_PATH" ]]; then
+                echo -e "${RED}File not found: $KEY_PATH${NC}"
+                exit 1
+            fi
+            PRIVATE_KEY=$(cat "$KEY_PATH" | grep -v "BEGIN\|END" | tr -d '\n')
+            ;;
+        3)
+            echo -e "${YELLOW}Skipping authentication setup. Cortex APIs will not be available.${NC}"
+            export SKIP_AUTH="true"
+            return
+            ;;
+        *)
+            echo -e "${RED}Invalid option${NC}"
+            exit 1
+            ;;
+    esac
+    
+    # Get the username for this connection
+    CURRENT_USER=$(snow sql -q "SELECT CURRENT_USER()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_USER()":"[^"]*"' | cut -d'"' -f4)
+    
+    # Create the secret in Snowflake
+    echo "Creating authentication secret..."
+    run_sql "CREATE OR REPLACE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PRIVATE_KEY_SECRET TYPE = GENERIC_STRING SECRET_STRING = '$PRIVATE_KEY'" "Create private key secret"
+    
+    export SNOWFLAKE_USER="$CURRENT_USER"
+    export AUTH_SECRET_NAME="$DATABASE.$SCHEMA.SNOWFLAKE_PRIVATE_KEY_SECRET"
+    
+    echo -e "${GREEN}Authentication secret created!${NC}"
+}
+
+# =============================================================================
+# STEP 5: CREATE TABLES
 # =============================================================================
 create_tables() {
     echo ""
@@ -201,7 +271,7 @@ create_tables() {
 }
 
 # =============================================================================
-# STEP 5: LOAD DATA
+# STEP 6: LOAD DATA
 # =============================================================================
 load_data() {
     echo ""
@@ -220,7 +290,7 @@ load_data() {
 }
 
 # =============================================================================
-# STEP 6: SETUP CORTEX SERVICES
+# STEP 7: SETUP CORTEX SERVICES
 # =============================================================================
 setup_cortex() {
     echo ""
@@ -235,7 +305,7 @@ setup_cortex() {
 }
 
 # =============================================================================
-# STEP 7: BUILD AND PUSH DOCKER IMAGE
+# STEP 8: BUILD AND PUSH DOCKER IMAGE
 # =============================================================================
 build_and_push_image() {
     echo ""
@@ -278,7 +348,7 @@ build_and_push_image() {
 }
 
 # =============================================================================
-# STEP 8: DEPLOY SPCS SERVICE
+# STEP 9: DEPLOY SPCS SERVICE
 # =============================================================================
 deploy_service() {
     echo ""
@@ -294,7 +364,9 @@ deploy_service() {
     # Create service
     echo "  Creating SPCS service..."
     
-    SERVICE_SQL="
+    # Build service spec with or without secret based on auth setup
+    if [[ "$SKIP_AUTH" == "true" ]]; then
+        SERVICE_SQL="
     CREATE SERVICE IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC
       IN COMPUTE POOL $POOL_NAME
       FROM SPECIFICATION \$\$
@@ -313,15 +385,63 @@ spec:
         SNOWFLAKE_DATABASE: $DATABASE
         SNOWFLAKE_SCHEMA: $SCHEMA
         SNOWFLAKE_WAREHOUSE: $WAREHOUSE
+        SNOWFLAKE_ACCOUNT:
+          type: snowflakeBuiltIn
+          name: snowflake.account.name
+        SNOWFLAKE_HOST:
+          type: snowflakeBuiltIn
+          name: snowflake.account.url
   endpoints:
     - name: app
-      port: 3000
+      port: 8080
       public: true
 \$\$
       EXTERNAL_ACCESS_INTEGRATIONS = (TRUCK_CONFIG_EXTERNAL_ACCESS)
       MIN_INSTANCES = 1
       MAX_INSTANCES = 1;
     "
+    else
+        SERVICE_SQL="
+    CREATE SERVICE IF NOT EXISTS $DATABASE.$SCHEMA.TRUCK_CONFIGURATOR_SVC
+      IN COMPUTE POOL $POOL_NAME
+      FROM SPECIFICATION \$\$
+spec:
+  containers:
+    - name: truck-configurator
+      image: $IMAGE_PATH
+      resources:
+        requests:
+          memory: 2G
+          cpu: 1
+        limits:
+          memory: 4G
+          cpu: 2
+      env:
+        SNOWFLAKE_DATABASE: $DATABASE
+        SNOWFLAKE_SCHEMA: $SCHEMA
+        SNOWFLAKE_WAREHOUSE: $WAREHOUSE
+        SNOWFLAKE_USER: $SNOWFLAKE_USER
+        SNOWFLAKE_ACCOUNT:
+          type: snowflakeBuiltIn
+          name: snowflake.account.name
+        SNOWFLAKE_HOST:
+          type: snowflakeBuiltIn
+          name: snowflake.account.url
+      secrets:
+        - snowflakeSecret:
+            objectName: $AUTH_SECRET_NAME
+          secretKeyRef: secret_string
+          envVarName: SNOWFLAKE_PRIVATE_KEY
+  endpoints:
+    - name: app
+      port: 8080
+      public: true
+\$\$
+      EXTERNAL_ACCESS_INTEGRATIONS = (TRUCK_CONFIG_EXTERNAL_ACCESS)
+      MIN_INSTANCES = 1
+      MAX_INSTANCES = 1;
+    "
+    fi
     
     run_sql "$SERVICE_SQL" "Create SPCS service"
     
@@ -361,6 +481,7 @@ main() {
     setup_connection
     get_configuration
     deploy_infrastructure
+    setup_auth_secret
     create_tables
     load_data
     setup_cortex
