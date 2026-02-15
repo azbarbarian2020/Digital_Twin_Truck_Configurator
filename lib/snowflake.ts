@@ -7,7 +7,7 @@ let connection: snowflake.Connection | null = null;
 let cachedToken: string | null = null;
 
 export function getSchema(): string {
-  return process.env.SNOWFLAKE_SCHEMA || "BOM3";
+  return process.env.SNOWFLAKE_SCHEMA || "TRUCK_CONFIG";
 }
 
 export function getDatabase(): string {
@@ -54,8 +54,8 @@ function getConfig(): snowflake.ConnectionOptions {
   if (privateKey) {
     console.log("Using Key-Pair authentication");
     return {
-      account: process.env.SNOWFLAKE_ACCOUNT || "SFSENORTHAMERICA-AWSBARBARIAN",
-      username: process.env.SNOWFLAKE_USER || "Horizonadmin",
+      account: process.env.SNOWFLAKE_ACCOUNT || "",
+      username: process.env.SNOWFLAKE_USER || "",
       authenticator: "SNOWFLAKE_JWT",
       privateKey: privateKey,
       warehouse: process.env.SNOWFLAKE_WAREHOUSE || "DEMO_WH",
@@ -67,11 +67,12 @@ function getConfig(): snowflake.ConnectionOptions {
   // Fallback to PAT for local dev (set SNOWFLAKE_PAT env var)
   console.log("Using PAT authentication");
   const pat = process.env.SNOWFLAKE_PAT || "";
+  const account = process.env.SNOWFLAKE_ACCOUNT || "";
   
   return {
-    account: process.env.SNOWFLAKE_ACCOUNT || "SFSENORTHAMERICA-AWSBARBARIAN",
-    host: process.env.SNOWFLAKE_HOST || "sfsenorthamerica-awsbarbarian.snowflakecomputing.com",
-    username: process.env.SNOWFLAKE_USER || "Horizonadmin",
+    account: account,
+    host: process.env.SNOWFLAKE_HOST || `${account}.snowflakecomputing.com`,
+    username: process.env.SNOWFLAKE_USER || "",
     password: pat,
     warehouse: process.env.SNOWFLAKE_WAREHOUSE || "DEMO_WH",
     database: getDatabase(),

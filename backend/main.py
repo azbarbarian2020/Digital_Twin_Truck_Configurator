@@ -173,7 +173,9 @@ def get_connection():
         )
     else:
         print("Connecting with connection name (local dev)")
-        conn_name = os.getenv("SNOWFLAKE_CONNECTION_NAME", "awsbarbarian_CoCo")
+        conn_name = os.getenv("SNOWFLAKE_CONNECTION_NAME", "")
+        if not conn_name:
+            raise ValueError("No SNOWFLAKE_CONNECTION_NAME set for local dev")
         _connection = snowflake.connector.connect(
             connection_name=conn_name,
             warehouse=SNOWFLAKE_WAREHOUSE,
