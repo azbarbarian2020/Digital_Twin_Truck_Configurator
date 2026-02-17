@@ -53,7 +53,8 @@ if [[ -z "$ACCOUNT_HOST" || ! "$ACCOUNT_HOST" == *"snowflakecomputing.com"* ]]; 
 fi
 
 CURRENT_USER=$(snow sql -q "SELECT CURRENT_USER() AS CUR_USER" --connection "$CONNECTION_NAME" 2>/dev/null | grep -E "^\| [A-Z]" | tail -1 | sed 's/|//g' | tr -d ' ')
-ACCOUNT_NAME=$(snow sql -q "SELECT CURRENT_ACCOUNT() AS CUR_ACCT" --connection "$CONNECTION_NAME" 2>/dev/null | grep -E "^\| [A-Z]" | tail -1 | sed 's/|//g' | tr -d ' ')
+# Derive org-account format from ACCOUNT_HOST (e.g., sfsenorthamerica-jdrew.snowflakecomputing.com -> SFSENORTHAMERICA-JDREW)
+ACCOUNT_NAME=$(echo "$ACCOUNT_HOST" | sed 's/.snowflakecomputing.com//' | tr '[:lower:]' '[:upper:]')
 
 echo ""
 echo "Account: $ACCOUNT_NAME"
