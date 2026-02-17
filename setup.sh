@@ -52,8 +52,8 @@ if [[ -z "$ACCOUNT_HOST" || ! "$ACCOUNT_HOST" == *"snowflakecomputing.com"* ]]; 
     read -p "Enter your Snowflake hostname (e.g., sfsenorthamerica-jdrew.snowflakecomputing.com): " ACCOUNT_HOST
 fi
 
-CURRENT_USER=$(snow sql -q "SELECT CURRENT_USER()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_USER()":"[^"]*"' | cut -d'"' -f4)
-ACCOUNT_NAME=$(snow sql -q "SELECT CURRENT_ACCOUNT()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_ACCOUNT()":"[^"]*"' | cut -d'"' -f4)
+CURRENT_USER=$(snow sql -q "SELECT CURRENT_USER() AS CUR_USER" --connection "$CONNECTION_NAME" 2>/dev/null | grep -E "^\| [A-Z]" | tail -1 | sed 's/|//g' | tr -d ' ')
+ACCOUNT_NAME=$(snow sql -q "SELECT CURRENT_ACCOUNT() AS CUR_ACCT" --connection "$CONNECTION_NAME" 2>/dev/null | grep -E "^\| [A-Z]" | tail -1 | sed 's/|//g' | tr -d ' ')
 
 echo ""
 echo "Account: $ACCOUNT_NAME"
@@ -210,8 +210,8 @@ echo ""
 # ============ STEP 5: Create Stages ============
 echo "STEP 5: Create Stages"
 echo "--------------------"
-run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.ENGINEERING_DOCS_STAGE DIRECTORY = (ENABLE = TRUE)"
-run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.SEMANTIC_MODELS COMMENT = 'Stage for semantic model YAML files'"
+run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.ENGINEERING_DOCS_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE') DIRECTORY = (ENABLE = TRUE)"
+run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.SEMANTIC_MODELS ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE') COMMENT = 'Stage for semantic model YAML files'"
 echo ""
 
 # ============ STEP 6: Load Data ============
