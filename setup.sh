@@ -6,7 +6,7 @@ echo "  Truck Configurator Demo - Setup Script"
 echo "========================================="
 echo ""
 
-# Configuration - MODIFY THESE FOR YOUR TARGET ACCOUNT
+# Configuration
 DATABASE="BOM"
 SCHEMA="TRUCK_CONFIG"
 WAREHOUSE="DEMO_WH"
@@ -14,54 +14,100 @@ COMPUTE_POOL="TRUCK_CONFIG_POOL"
 IMAGE_REPO="TRUCK_CONFIG_REPO"
 SERVICE_NAME="TRUCK_CONFIGURATOR_SVC"
 
-# Connection setup
-setup_connection() {
-    echo "Available connections:"
-    snow connection list 2>/dev/null || echo "  (none found)"
-    echo ""
-    
-    read -p "Enter connection name to use: " CONNECTION_NAME
-    
-    if [[ -z "$CONNECTION_NAME" ]]; then
-        echo "ERROR: Connection name required"
-        exit 1
-    fi
-    
-    # Test connection
-    echo "Testing connection..."
-    snow sql -q "SELECT CURRENT_ACCOUNT(), CURRENT_USER()" --connection "$CONNECTION_NAME" || {
-        echo "ERROR: Connection failed"
-        exit 1
-    }
-    
-    # Get account identifier for network rule
-    ACCOUNT_INFO=$(snow sql -q "SELECT CURRENT_ACCOUNT()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_ACCOUNT()":"[^"]*"' | cut -d'"' -f4)
-    echo "Account: $ACCOUNT_INFO"
-    
-    export CONNECTION_NAME
-    export ACCOUNT_INFO
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ============ STEP 1: Connection Setup ============
+echo "STEP 1: Connection Setup"
+echo "------------------------"
+echo ""
+echo "Available Snowflake CLI connections:"
+echo ""
+snow connection list 2>/dev/null || echo "  (none found)"
+echo ""
+
+read -p "Enter connection name to use: " CONNECTION_NAME
+
+if [[ -z "$CONNECTION_NAME" ]]; then
+    echo "ERROR: Connection name required"
+    exit 1
+fi
+
+# Test connection
+echo ""
+echo "Testing connection..."
+snow sql -q "SELECT CURRENT_ACCOUNT(), CURRENT_USER()" --connection "$CONNECTION_NAME" || {
+    echo "ERROR: Connection failed"
+    exit 1
 }
 
 run_sql() {
     snow sql -q "$1" --connection "$CONNECTION_NAME"
 }
 
-# Step 1: Setup connection
-echo "STEP 1: Connection Setup"
-echo "------------------------"
-setup_connection
+# Get account hostname for network rule (auto-detect)
+ACCOUNT_HOST=$(snow sql -q "SELECT CONCAT(LOWER(CURRENT_ORGANIZATION_NAME()), '-', LOWER(CURRENT_ACCOUNT_NAME()), '.snowflakecomputing.com')" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CONCAT[^"]*":"[^"]*"' | cut -d'"' -f4 || echo "")
+
+if [[ -z "$ACCOUNT_HOST" ]]; then
+    read -p "Enter your Snowflake hostname (e.g., sfsenorthamerica-jdrew.snowflakecomputing.com): " ACCOUNT_HOST
+fi
+
+CURRENT_USER=$(snow sql -q "SELECT CURRENT_USER()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_USER()":"[^"]*"' | cut -d'"' -f4)
+ACCOUNT_NAME=$(snow sql -q "SELECT CURRENT_ACCOUNT()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_ACCOUNT()":"[^"]*"' | cut -d'"' -f4)
+
+echo ""
+echo "Account: $ACCOUNT_NAME"
+echo "User: $CURRENT_USER"
+echo "Host: $ACCOUNT_HOST"
 echo ""
 
-# Step 2: Create database and schema
-echo "STEP 2: Create Database/Schema"
+# ============ STEP 2: Private Key Setup ============
+echo "STEP 2: Private Key Setup"
+echo "-------------------------"
+
+# Look for private key in common locations
+KEY_PATHS=(
+    "$HOME/.snowflake/keys/rsa_key.p8"
+    "$HOME/.ssh/snowflake_rsa_key.p8"
+    "$HOME/rsa_key.p8"
+    "./rsa_key.p8"
+)
+
+PRIVATE_KEY_FILE=""
+for path in "${KEY_PATHS[@]}"; do
+    if [[ -f "$path" ]]; then
+        PRIVATE_KEY_FILE="$path"
+        echo "Found private key: $path"
+        break
+    fi
+done
+
+if [[ -z "$PRIVATE_KEY_FILE" ]]; then
+    echo "No private key found in common locations."
+    echo "Checked: ${KEY_PATHS[*]}"
+    echo ""
+    read -p "Enter path to your private key file (.p8): " PRIVATE_KEY_FILE
+    
+    if [[ ! -f "$PRIVATE_KEY_FILE" ]]; then
+        echo "ERROR: File not found: $PRIVATE_KEY_FILE"
+        exit 1
+    fi
+fi
+
+# Extract base64 content (strip headers and newlines)
+PRIVATE_KEY_CONTENT=$(grep -v "^-----" "$PRIVATE_KEY_FILE" | tr -d '\n')
+echo "Private key loaded (${#PRIVATE_KEY_CONTENT} chars)"
+echo ""
+
+# ============ STEP 3: Create Database/Schema ============
+echo "STEP 3: Create Database/Schema"
 echo "------------------------------"
 run_sql "CREATE DATABASE IF NOT EXISTS $DATABASE"
 run_sql "CREATE SCHEMA IF NOT EXISTS $DATABASE.$SCHEMA"
-run_sql "USE SCHEMA $DATABASE.$SCHEMA"
+run_sql "CREATE WAREHOUSE IF NOT EXISTS $WAREHOUSE WAREHOUSE_SIZE = 'XSMALL' AUTO_SUSPEND = 60 AUTO_RESUME = TRUE"
 echo ""
 
-# Step 3: Create tables
-echo "STEP 3: Create Tables"
+# ============ STEP 4: Create Tables ============
+echo "STEP 4: Create Tables"
 echo "--------------------"
 
 run_sql "CREATE OR REPLACE TABLE $DATABASE.$SCHEMA.MODEL_TBL (
@@ -160,89 +206,93 @@ run_sql "CREATE OR REPLACE TABLE $DATABASE.$SCHEMA.VALIDATION_RULES (
 echo "Tables created."
 echo ""
 
-# Step 4: Create stages
-echo "STEP 4: Create Stages"
+# ============ STEP 5: Create Stages ============
+echo "STEP 5: Create Stages"
 echo "--------------------"
 run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.ENGINEERING_DOCS_STAGE DIRECTORY = (ENABLE = TRUE)"
 run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.SEMANTIC_MODELS COMMENT = 'Stage for semantic model YAML files'"
 echo ""
 
-# Step 5: Create image repository
-echo "STEP 5: Create Image Repository"
-echo "-------------------------------"
-run_sql "CREATE IMAGE REPOSITORY IF NOT EXISTS $DATABASE.$SCHEMA.$IMAGE_REPO"
+# ============ STEP 6: Load Data ============
+echo "STEP 6: Load Data"
+echo "----------------"
+if [[ -f "$SCRIPT_DIR/deployment/scripts/03_load_data.sql" ]]; then
+    echo "Loading demo data (BOM_TBL, MODEL_TBL, TRUCK_OPTIONS)..."
+    snow sql -f "$SCRIPT_DIR/deployment/scripts/03_load_data.sql" --connection "$CONNECTION_NAME"
+    echo "Data loaded."
+else
+    echo "WARNING: 03_load_data.sql not found, skipping data load"
+fi
 echo ""
 
-# Step 6: Create compute pool
-echo "STEP 6: Create Compute Pool"
-echo "--------------------------"
+# ============ STEP 7: Create Cortex Search Service ============
+echo "STEP 7: Create Cortex Search Service"
+echo "------------------------------------"
+run_sql "CREATE CORTEX SEARCH SERVICE IF NOT EXISTS $DATABASE.$SCHEMA.ENGINEERING_DOCS_SEARCH
+    ON CHUNK_TEXT
+    ATTRIBUTES DOC_ID, DOC_TITLE, DOC_PATH, CHUNK_INDEX
+    WAREHOUSE = $WAREHOUSE
+    TARGET_LAG = '1 minute'
+    AS (
+        SELECT CHUNK_ID, DOC_ID, DOC_TITLE, DOC_PATH, CHUNK_INDEX, CHUNK_TEXT
+        FROM $DATABASE.$SCHEMA.ENGINEERING_DOCS_CHUNKED
+    )"
+echo ""
+
+# ============ STEP 8: Create Semantic View ============
+echo "STEP 8: Create Semantic View for Cortex Analyst"
+echo "-----------------------------------------------"
+
+# Process YAML - replace placeholders
+sed "s/\${DATABASE}/$DATABASE/g; s/\${SCHEMA}/$SCHEMA/g" "$SCRIPT_DIR/deployment/data/truck_config_analyst.yaml" > /tmp/truck_config_analyst_processed.yaml
+
+# Upload to stage
+snow stage copy /tmp/truck_config_analyst_processed.yaml "@$DATABASE.$SCHEMA.SEMANTIC_MODELS/" --connection "$CONNECTION_NAME" --overwrite 2>/dev/null || true
+
+# Create semantic view
+run_sql "CREATE OR REPLACE SEMANTIC VIEW $DATABASE.$SCHEMA.TRUCK_CONFIG_ANALYST
+    FROM '@$DATABASE.$SCHEMA.SEMANTIC_MODELS/truck_config_analyst_processed.yaml'"
+echo "Semantic view created."
+echo ""
+
+# ============ STEP 9: Create Infrastructure ============
+echo "STEP 9: Create SPCS Infrastructure"
+echo "----------------------------------"
+
+# Image repository
+run_sql "CREATE IMAGE REPOSITORY IF NOT EXISTS $DATABASE.$SCHEMA.$IMAGE_REPO"
+
+# Compute pool
 run_sql "CREATE COMPUTE POOL IF NOT EXISTS $COMPUTE_POOL
     MIN_NODES = 1
     MAX_NODES = 2
     INSTANCE_FAMILY = CPU_X64_XS
     AUTO_RESUME = TRUE
-    AUTO_SUSPEND_SECS = 300
-    COMMENT = 'Compute pool for Truck Configurator'"
-echo ""
+    AUTO_SUSPEND_SECS = 300"
 
-# Step 7: Create network rule and external access integration
-echo "STEP 7: Create Network Rule & External Access"
-echo "---------------------------------------------"
-
-# Determine the account hostname for network rule
-# Format: orgname-accountname.snowflakecomputing.com
-ACCOUNT_HOST=$(snow sql -q "SELECT CONCAT(LOWER(CURRENT_ORGANIZATION_NAME()), '-', LOWER(CURRENT_ACCOUNT_NAME()), '.snowflakecomputing.com')" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CONCAT[^"]*":"[^"]*"' | cut -d'"' -f4 || echo "")
-
-if [[ -z "$ACCOUNT_HOST" ]]; then
-    # Fallback: ask user
-    read -p "Enter your Snowflake hostname (e.g., sfsenorthamerica-jdrew.snowflakecomputing.com): " ACCOUNT_HOST
-fi
-
-echo "Using hostname for network rule: $ACCOUNT_HOST"
-
+# Network rule (CRITICAL: must use target account hostname)
+echo "Creating network rule for: $ACCOUNT_HOST"
 run_sql "CREATE OR REPLACE NETWORK RULE $DATABASE.$SCHEMA.SNOWFLAKE_API_RULE
     TYPE = HOST_PORT
     MODE = EGRESS
     VALUE_LIST = ('$ACCOUNT_HOST:443')"
 
+# External access integration
 run_sql "CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION ${SCHEMA}_EXTERNAL_ACCESS
     ALLOWED_NETWORK_RULES = ($DATABASE.$SCHEMA.SNOWFLAKE_API_RULE)
-    ENABLED = TRUE
-    COMMENT = 'Allow truck configurator to access Snowflake Cortex APIs'"
-echo ""
+    ENABLED = TRUE"
 
-# Step 8: Create secret for private key
-echo "STEP 8: Create Secret"
-echo "--------------------"
-echo "You need to provide the base64-encoded private key content."
-echo "This is used for key-pair authentication from the SPCS container."
-echo ""
-
-if [[ -f "$HOME/.snowflake/keys/rsa_key.p8" ]]; then
-    echo "Found key at ~/.snowflake/keys/rsa_key.p8"
-    read -p "Use this key? (y/n): " USE_KEY
-    if [[ "$USE_KEY" == "y" ]]; then
-        # Extract just the base64 content (no headers)
-        PRIVATE_KEY_CONTENT=$(grep -v "^-----" "$HOME/.snowflake/keys/rsa_key.p8" | tr -d '\n')
-    fi
-fi
-
-if [[ -z "$PRIVATE_KEY_CONTENT" ]]; then
-    echo "Enter the base64 private key content (without BEGIN/END headers):"
-    read -s PRIVATE_KEY_CONTENT
-fi
-
+# Secret for private key
 run_sql "CREATE OR REPLACE SECRET $DATABASE.$SCHEMA.SNOWFLAKE_PRIVATE_KEY_SECRET
     TYPE = GENERIC_STRING
     SECRET_STRING = '$PRIVATE_KEY_CONTENT'"
 echo "Secret created."
 echo ""
 
-# Step 9: Build and push Docker image
-echo "STEP 9: Build and Push Docker Image"
-echo "-----------------------------------"
+# ============ STEP 10: Build and Push Docker Image ============
+echo "STEP 10: Build and Push Docker Image"
+echo "------------------------------------"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Login to registry
@@ -257,33 +307,22 @@ REPO_URL=$(snow spcs image-repository url $IMAGE_REPO \
 
 echo "Repository URL: $REPO_URL"
 
-# Build image for linux/amd64
-echo "Building Docker image..."
+# Build image
+echo "Building Docker image (this may take a few minutes)..."
 docker build --platform linux/amd64 -t truck-configurator:latest .
 
 # Tag and push
-IMAGE_TAG="v1-setup"
+IMAGE_TAG="v1-$(date +%Y%m%d-%H%M%S)"
 docker tag truck-configurator:latest "$REPO_URL/truck-configurator:$IMAGE_TAG"
 echo "Pushing image..."
 docker push "$REPO_URL/truck-configurator:$IMAGE_TAG"
 echo "Image pushed: $REPO_URL/truck-configurator:$IMAGE_TAG"
 echo ""
 
-# Step 10: Get account details for service spec
-echo "STEP 10: Create Service"
-echo "----------------------"
+# ============ STEP 11: Deploy Service ============
+echo "STEP 11: Deploy SPCS Service"
+echo "----------------------------"
 
-# Get current user
-CURRENT_USER=$(snow sql -q "SELECT CURRENT_USER()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_USER()":"[^"]*"' | cut -d'"' -f4)
-
-# Get account name (org-account format)
-ACCOUNT_NAME=$(snow sql -q "SELECT CURRENT_ACCOUNT()" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CURRENT_ACCOUNT()":"[^"]*"' | cut -d'"' -f4)
-
-echo "User: $CURRENT_USER"
-echo "Account: $ACCOUNT_NAME"
-echo "Host: $ACCOUNT_HOST"
-
-# Create service
 run_sql "CREATE SERVICE IF NOT EXISTS $DATABASE.$SCHEMA.$SERVICE_NAME
     IN COMPUTE POOL $COMPUTE_POOL
     EXTERNAL_ACCESS_INTEGRATIONS = (${SCHEMA}_EXTERNAL_ACCESS)
@@ -320,18 +359,18 @@ spec:
 \$\$"
 
 echo ""
-echo "Waiting for service to start..."
-sleep 30
+echo "Waiting for service to start (this may take 1-2 minutes)..."
+sleep 45
 
 # Check status
+echo ""
+echo "Service Status:"
 snow spcs service status $SERVICE_NAME \
     --database "$DATABASE" \
     --schema "$SCHEMA" \
     --connection "$CONNECTION_NAME"
 
 echo ""
-
-# Get endpoint
 echo "Service Endpoint:"
 snow spcs service list-endpoints $SERVICE_NAME \
     --database "$DATABASE" \
@@ -343,9 +382,5 @@ echo "========================================="
 echo "  Setup Complete!"
 echo "========================================="
 echo ""
-echo "Next steps:"
-echo "1. Load data into tables (MODEL_TBL, BOM_TBL, TRUCK_OPTIONS, etc.)"
-echo "2. Upload engineering docs to ENGINEERING_DOCS_STAGE"
-echo "3. Create Cortex Search Service for document search"
-echo "4. Access the app at the endpoint URL above"
+echo "Open the endpoint URL above in your browser."
 echo ""
