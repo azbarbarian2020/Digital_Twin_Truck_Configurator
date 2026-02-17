@@ -28,7 +28,14 @@ if [[ -n "$1" ]]; then
 else
     echo "Available Snowflake CLI connections:"
     echo ""
-    snow connection list 2>/dev/null || echo "  (none found)"
+    # Parse connections from config file (snow connection list can be buggy)
+    if [[ -f "$HOME/.snowflake/config.toml" ]]; then
+        grep -E "^\[connections\." "$HOME/.snowflake/config.toml" 2>/dev/null | sed 's/\[connections\.//; s/\]//' | while read conn; do
+            echo "  - $conn"
+        done
+    else
+        echo "  (no config file found at ~/.snowflake/config.toml)"
+    fi
     echo ""
     read -p "Enter connection name to use: " CONNECTION_NAME
 fi
