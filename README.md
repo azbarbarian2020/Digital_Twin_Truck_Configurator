@@ -6,7 +6,6 @@ An AI-powered truck configuration system that validates engineering specificatio
 
 **[Watch the Demo Video](https://youtu.be/hfI-tKUpI7U)**
 
-![Architecture](docs/architecture.png)
 
 ## Overview
 
