@@ -218,7 +218,10 @@ echo "STEP 6: Load Data"
 echo "----------------"
 if [[ -f "$SCRIPT_DIR/deployment/scripts/03_load_data.sql" ]]; then
     echo "Loading demo data (BOM_TBL, MODEL_TBL, TRUCK_OPTIONS)..."
-    snow sql -f "$SCRIPT_DIR/deployment/scripts/03_load_data.sql" --connection "$CONNECTION_NAME"
+    # Process SQL file - replace placeholders with actual values
+    sed "s/\${DATABASE}/$DATABASE/g; s/\${SCHEMA}/$SCHEMA/g; s/\${WAREHOUSE}/$WAREHOUSE/g" \
+        "$SCRIPT_DIR/deployment/scripts/03_load_data.sql" > /tmp/load_data_processed.sql
+    snow sql -f /tmp/load_data_processed.sql --connection "$CONNECTION_NAME"
     echo "Data loaded."
 else
     echo "WARNING: 03_load_data.sql not found, skipping data load"
