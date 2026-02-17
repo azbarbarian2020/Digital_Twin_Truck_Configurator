@@ -1,6 +1,10 @@
 # Digital Twin Truck Configurator
 
+![Digital Twin Truck Configurator](public/Digital_Twin_Truck_Config.png)
+
 An AI-powered truck configuration system that validates engineering specifications in real-time using Snowflake Cortex. Built as a full-stack application running on Snowpark Container Services (SPCS).
+
+**[Watch the Demo Video](https://youtu.be/hfI-tKUpI7U)**
 
 ![Architecture](docs/architecture.png)
 
@@ -9,7 +13,7 @@ An AI-powered truck configuration system that validates engineering specificatio
 This demo showcases how Snowflake's AI capabilities can be integrated into a digital twin application for manufacturing. Users configure commercial trucks by selecting components, and the system:
 
 1. **Validates configurations** against engineering specifications stored in PDFs
-2. **Uses AI (Cortex Analyst + Cortex Search)** to understand spec requirements
+2. **Uses AI (Cortex Analyst + Cortex Search + Cortex Complete)** to understand spec requirements
 3. **Provides intelligent fix recommendations** when configurations don't meet specs
 4. **Runs entirely on Snowflake** - data, AI, and compute in one platform
 
@@ -49,35 +53,53 @@ This demo showcases how Snowflake's AI capabilities can be integrated into a dig
 
 ## Demo Flow
 
-### 1. Select a Truck Model
-Choose from 5 truck models ranging from regional delivery to premium heavy-haul.
+### 1. Navigate to the Heavy Haul Max HH-1200
+Select the Heavy Haul Max HH-1200 truck model from the model selector.
 
-### 2. Configure Components
-Select options across multiple systems:
-- **Powertrain**: Engine, transmission, turbocharger
-- **Chassis**: Frame, suspension, brakes
-- **Cab**: Interior, climate, sleeper options
-- **Safety**: ADAS, stability control, lighting
+### 2. Explore the BOM Hierarchy
+Show the different levels of the BOM and how selections change price, weight, and performance metrics in real-time.
 
-### 3. Verify Configuration
-Click "Verify Configuration" to validate against engineering specs. The system will:
-- Search engineering documents using **Cortex Search**
-- Extract requirements using **Cortex Complete (LLM)**
-- Compare selected components against requirements
-- Show grouped issues with intelligent fix recommendations
+### 3. Use the Configuration Assistant
+Open the Configuration Assistant chatbot. Tell it: **"Maximize safety and comfort while minimizing all other costs"**. Click **Apply** to let the AI optimize your configuration.
 
-### 4. Apply Recommended Fixes
-If issues are found, the system provides a one-click fix plan that swaps non-compliant components with compliant alternatives.
+### 4. Select the 605 HP Engine Option
+Navigate to **Engine > Engine Block > Power Rating > 605 HP / 2050 lb-ft Maximum**.
+
+### 5. Upload Engineering Specification
+Click the upload icon and upload the `605_HP_Engine_Requirements.pdf` document.
+
+### 6. Verify Configuration
+Once uploaded, click **Verify Configuration** to validate against the engineering specs.
+
+### 7. Accept the Fixes
+Review the validation results and accept the recommended fixes to make the configuration compliant.
+
+### 8. Save Configuration
+Click **Save Configuration**, click **Generate with AI** to create a description, give it a name, and click **Save**.
+
+### 9. Create a Second Configuration
+If you only have one saved configuration, pick another truck, make some changes, and save a second configuration.
+
+### 10. Compare Configurations
+Click the compare icon at the top of the page.
+
+### 11. Side-by-Side Comparison
+Compare two models next to each other to see differences in specifications, price, and performance.
+
+### 12. View Configuration Report
+Click the document icon at the top of one of the configurations to show the detailed configuration report.
 
 ## Key Features
 
 | Feature | Technology | Description |
 |---------|------------|-------------|
+| Document Upload | PARSE_DOCUMENT + Cortex Complete | Parse PDFs and extract validation rules |
 | Document Search | Cortex Search | Semantic search over engineering PDFs |
 | Requirement Extraction | Cortex Complete | LLM extracts specs from document chunks |
+| Configuration Optimization | Cortex Analyst | AI-powered configuration recommendations |
 | Configuration Validation | Python + SQL | Rules engine checks component compatibility |
 | Fix Recommendations | AI + Rules | Suggests compliant alternatives |
-| Real-time Updates | React + WebSocket | Live configuration totals |
+| Real-time Updates | React + SSE | Live configuration totals |
 
 ## Installation
 
@@ -99,27 +121,29 @@ cd Digital_Twin_Truck_Configurator
 ./setup.sh
 ```
 
-The setup script will prompt you for:
-1. **Connection name**: Your Snowflake CLI connection
-2. **Private key**: For key-pair authentication from SPCS
+The setup script will:
+1. Prompt for your Snowflake CLI connection name
+2. Auto-generate RSA key-pair for SPCS authentication
+3. Create all required Snowflake objects
+4. Build and deploy the application
 
-### What setup.sh Does
+### What setup.sh Creates
 
-1. Creates database, schema, and tables
-2. Creates compute pool and image repository
-3. Creates network rule (for Cortex API access)
-4. Creates external access integration
-5. Creates secret for private key
-6. Builds and pushes Docker image
-7. Creates SPCS service
-8. Outputs the endpoint URL
+1. Database (BOM) and schema (TRUCK_CONFIG)
+2. Tables (BOM_TBL, MODEL_TBL, VALIDATION_RULES, DOCUMENT_CHUNKS, SAVED_CONFIGURATIONS)
+3. Stages with SNOWFLAKE_SSE encryption (required for PARSE_DOCUMENT)
+4. Cortex Search Service for document search
+5. Semantic View for Cortex Analyst
+6. Compute pool and image repository
+7. Network rule and external access integration
+8. Secret for private key storage
+9. SPCS service with the application
 
 ### Post-Setup: Load Data
 
 After setup completes, load the demo data:
 
 ```bash
-export CONNECTION_NAME=your_connection
 ./load_data.sh
 ```
 
@@ -127,17 +151,6 @@ This loads:
 - 5 truck models
 - 253 configurable options
 - 868 model-option mappings
-- Engineering validation rules
-
-### Upload Engineering Documents
-
-Upload PDFs to the stage for Cortex Search:
-
-```bash
-snow stage copy docs/605_HP_Engine_Requirements.pdf \
-    @BOM.TRUCK_CONFIG.ENGINEERING_DOCS_STAGE \
-    --connection your_connection
-```
 
 ## Configuration
 
@@ -196,6 +209,7 @@ CREATE NETWORK RULE SNOWFLAKE_API_RULE
 | "Could not connect to Snowflake" | Network rule wrong | Use account-specific hostname |
 | Auth failures in SPCS | Secret format | Store base64 key without headers |
 | Service won't start | Missing objects | Check compute pool, secret, integration exist |
+| Document upload fails | Stage encryption | Ensure stage uses SNOWFLAKE_SSE encryption |
 
 ### Check Service Logs
 
@@ -229,4 +243,4 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 For issues or questions:
 - Open a GitHub issue
-- Contact: [your-email]
+- Watch the [Demo Video](https://youtu.be/hfI-tKUpI7U) for guidance
