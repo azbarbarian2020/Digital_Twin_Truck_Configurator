@@ -20,12 +20,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "STEP 1: Connection Setup"
 echo "------------------------"
 echo ""
-echo "Available Snowflake CLI connections:"
-echo ""
-snow connection list 2>/dev/null || echo "  (none found)"
-echo ""
 
-read -p "Enter connection name to use: " CONNECTION_NAME
+# Use provided connection name or prompt
+if [[ -n "$1" ]]; then
+    CONNECTION_NAME="$1"
+    echo "Using connection: $CONNECTION_NAME"
+else
+    echo "Available Snowflake CLI connections:"
+    echo ""
+    snow connection list 2>/dev/null || echo "  (none found)"
+    echo ""
+    read -p "Enter connection name to use: " CONNECTION_NAME
+fi
 
 if [[ -z "$CONNECTION_NAME" ]]; then
     echo "ERROR: Connection name required"
@@ -66,34 +72,25 @@ echo ""
 echo "STEP 2: Private Key Setup"
 echo "-------------------------"
 
-# Look for private key in common locations
-KEY_PATHS=(
-    "$HOME/.snowflake/keys/rsa_key.p8"
-    "$HOME/.ssh/snowflake_rsa_key.p8"
-    "$HOME/rsa_key.p8"
-    "./rsa_key.p8"
-)
+# Generate a NEW key pair specifically for this deployment
+KEY_DIR="$HOME/.snowflake/keys"
+mkdir -p "$KEY_DIR"
+PRIVATE_KEY_FILE="$KEY_DIR/truck_config_key.p8"
+PUBLIC_KEY_FILE="$KEY_DIR/truck_config_key.pub"
 
-PRIVATE_KEY_FILE=""
-for path in "${KEY_PATHS[@]}"; do
-    if [[ -f "$path" ]]; then
-        PRIVATE_KEY_FILE="$path"
-        echo "Found private key: $path"
-        break
-    fi
-done
+echo "Generating new RSA key pair for this deployment..."
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out "$PRIVATE_KEY_FILE" -nocrypt 2>/dev/null
+openssl rsa -in "$PRIVATE_KEY_FILE" -pubout -out "$PUBLIC_KEY_FILE" 2>/dev/null
 
-if [[ -z "$PRIVATE_KEY_FILE" ]]; then
-    echo "No private key found in common locations."
-    echo "Checked: ${KEY_PATHS[*]}"
-    echo ""
-    read -p "Enter path to your private key file (.p8): " PRIVATE_KEY_FILE
-    
-    if [[ ! -f "$PRIVATE_KEY_FILE" ]]; then
-        echo "ERROR: File not found: $PRIVATE_KEY_FILE"
-        exit 1
-    fi
-fi
+# Extract public key content (single line, no headers)
+PUBLIC_KEY_CONTENT=$(grep -v "^-----" "$PUBLIC_KEY_FILE" | tr -d '\n')
+
+echo "Key pair generated."
+echo "Registering public key with user $CURRENT_USER..."
+
+# Register the public key with the current user
+run_sql "ALTER USER $CURRENT_USER SET RSA_PUBLIC_KEY='$PUBLIC_KEY_CONTENT'"
+echo "Public key registered with $CURRENT_USER"
 
 # Extract base64 content (strip headers and newlines)
 PRIVATE_KEY_CONTENT=$(grep -v "^-----" "$PRIVATE_KEY_FILE" | tr -d '\n')
@@ -150,19 +147,15 @@ run_sql "CREATE OR REPLACE TABLE $DATABASE.$SCHEMA.TRUCK_OPTIONS (
 )"
 
 run_sql "CREATE OR REPLACE TABLE $DATABASE.$SCHEMA.SAVED_CONFIGS (
-    CONFIG_ID VARCHAR(50) NOT NULL,
-    CONFIG_NAME VARCHAR(200) NOT NULL,
-    MODEL_ID VARCHAR(50) NOT NULL,
-    CREATED_BY VARCHAR(100),
-    CREATED_AT TIMESTAMP_NTZ(9) DEFAULT CURRENT_TIMESTAMP(),
-    UPDATED_AT TIMESTAMP_NTZ(9) DEFAULT CURRENT_TIMESTAMP(),
-    TOTAL_COST_USD NUMBER(12,2),
-    TOTAL_WEIGHT_LBS NUMBER(12,2),
-    PERFORMANCE_SUMMARY VARIANT,
-    CONFIG_OPTIONS VARIANT,
-    NOTES VARCHAR(2000),
-    IS_BASELINE BOOLEAN DEFAULT FALSE,
-    IS_VALIDATED BOOLEAN DEFAULT FALSE,
+    CONFIG_ID VARCHAR(100) NOT NULL,
+    MODEL_ID VARCHAR(20) NOT NULL,
+    CONFIG_NAME VARCHAR(200),
+    CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    UPDATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    TOTAL_COST NUMBER(12,2) DEFAULT 0,
+    TOTAL_WEIGHT NUMBER(12,2) DEFAULT 0,
+    SELECTIONS VARIANT NOT NULL,
+    NOTES VARCHAR(4000),
     PRIMARY KEY (CONFIG_ID)
 )"
 
@@ -213,6 +206,89 @@ echo "STEP 5: Create Stages"
 echo "--------------------"
 run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.ENGINEERING_DOCS_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE') DIRECTORY = (ENABLE = TRUE)"
 run_sql "CREATE STAGE IF NOT EXISTS $DATABASE.$SCHEMA.SEMANTIC_MODELS ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE') COMMENT = 'Stage for semantic model YAML files'"
+echo ""
+
+# ============ STEP 5b: Create Stored Procedures ============
+echo "STEP 5b: Create Stored Procedures"
+echo "---------------------------------"
+
+run_sql "CREATE OR REPLACE PROCEDURE $DATABASE.$SCHEMA.UPLOAD_AND_PARSE_DOCUMENT(FILE_CONTENT_BASE64 VARCHAR, FILE_NAME VARCHAR)
+RETURNS VARIANT
+LANGUAGE PYTHON
+RUNTIME_VERSION = '3.11'
+PACKAGES = ('snowflake-snowpark-python')
+HANDLER = 'main'
+EXECUTE AS OWNER
+AS \$\$
+import base64
+import tempfile
+import os
+import json
+
+def main(session, file_content_base64: str, file_name: str):
+    result = {
+        \"success\": False, 
+        \"file_name\": file_name, 
+        \"stage_path\": None, 
+        \"parsed_text\": None,
+        \"chunks_inserted\": 0,
+        \"error\": None
+    }
+    
+    try:
+        # Decode and write to temp file
+        file_bytes = base64.b64decode(file_content_base64)
+        suffix = '.' + file_name.split('.')[-1] if '.' in file_name else ''
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, file_name)
+        
+        with open(temp_path, 'wb') as f:
+            f.write(file_bytes)
+        
+        # Upload to stage
+        stage_path = \"@$DATABASE.$SCHEMA.ENGINEERING_DOCS_STAGE\"
+        put_result = session.file.put(
+            temp_path, 
+            stage_path, 
+            auto_compress=False, 
+            overwrite=True
+        )
+        
+        result[\"stage_path\"] = f\"{stage_path}/{file_name}\"
+        
+        # Parse document if supported type
+        if suffix.lower() in ['.pdf', '.docx', '.doc', '.pptx', '.ppt']:
+            # Parse the document
+            parse_sql = f\"\"\"
+                SELECT SNOWFLAKE.CORTEX.PARSE_DOCUMENT(
+                    '@$DATABASE.$SCHEMA.ENGINEERING_DOCS_STAGE',
+                    '{file_name}',
+                    {{'mode': 'LAYOUT'}}
+                ):content::VARCHAR as content
+            \"\"\"
+            parse_result = session.sql(parse_sql).collect()
+            if parse_result and parse_result[0]['CONTENT']:
+                content = parse_result[0]['CONTENT']
+                result[\"parsed_text\"] = content
+                
+                # NOTE: Chunk insertion is handled by the Python backend
+                # This stored procedure only uploads and parses
+                result[\"chunks_inserted\"] = 0
+        else:
+            result[\"parsed_text\"] = file_bytes.decode('utf-8', errors='ignore')
+        
+        result[\"success\"] = True
+        
+    except Exception as e:
+        result[\"error\"] = str(e)
+    finally:
+        if 'temp_path' in dir() and os.path.exists(temp_path):
+            os.unlink(temp_path)
+    
+    return result
+\$\$"
+
+echo "Stored procedures created."
 echo ""
 
 # ============ STEP 6: Load Data ============
