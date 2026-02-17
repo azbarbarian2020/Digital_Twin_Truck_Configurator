@@ -1,0 +1,334 @@
+name: TRUCK_CONFIG_ANALYST
+description: >
+  Truck configuration optimization assistant. Helps users optimize truck builds by finding 
+  the best options for each component group based on performance categories (Safety, Comfort, 
+  Power, Economy, Hauling, Durability, Cooling, Emissions) and cost/weight constraints.
+  QUERY TYPES SUPPORTED: 
+  1. Single optimization: "Minimize costs", "Maximize Safety", "Minimize weight"
+  2. Multi-category optimization: "Maximize Safety and Comfort", "Maximize Hauling, Cooling and Emissions"
+  3. Hybrid optimization: "Maximize Safety while minimizing costs for everything else"
+  4. Discovery queries: "What options have spec documents?", "Which model has highest base MSRP?"
+
+tables:
+  - name: BOM_OPTIONS
+    base_table:
+      database: ${DATABASE}
+      schema: ${SCHEMA}
+      table: BOM_TBL
+    primary_key:
+      columns:
+        - OPTION_ID
+    dimensions:
+      - name: COMPONENT_GROUP
+        description: The functional group this option belongs to (e.g., Cab, Chassis, Engine, Transmission)
+        expr: COMPONENT_GROUP
+        data_type: VARCHAR(100)
+      - name: OPTION_ID
+        description: Unique identifier for each option
+        expr: OPTION_ID
+        data_type: VARCHAR(50)
+      - name: OPTION_NAME
+        description: Human-readable name of the option
+        expr: OPTION_NM
+        data_type: VARCHAR(150)
+      - name: PERFORMANCE_CATEGORY
+        description: "Which performance attribute this option excels at. Values: Safety, Comfort, Power, Economy, Hauling, Durability, Cooling, Emissions"
+        expr: PERFORMANCE_CATEGORY
+        data_type: VARCHAR(50)
+        sample_values:
+          - Safety
+          - Comfort
+          - Power
+          - Economy
+          - Hauling
+          - Durability
+          - Cooling
+          - Emissions
+    facts:
+      - name: COST_USD
+        description: Cost of the option in US dollars
+        expr: COST_USD
+        data_type: NUMBER(12,2)
+      - name: PERFORMANCE_SCORE
+        description: Performance rating from 0-10 for the option's performance category
+        expr: PERFORMANCE_SCORE
+        data_type: NUMBER(3,1)
+      - name: WEIGHT_LBS
+        description: Weight of the option in pounds
+        expr: WEIGHT_LBS
+        data_type: NUMBER(10,2)
+
+  - name: MODEL_VALID_OPTIONS
+    base_table:
+      database: ${DATABASE}
+      schema: ${SCHEMA}
+      table: TRUCK_OPTIONS
+    dimensions:
+      - name: IS_DEFAULT
+        description: Whether this option is the default for this model
+        expr: IS_DEFAULT
+        data_type: BOOLEAN
+      - name: MODEL_ID
+        description: "Truck model identifier. Valid values: MDL-REGIONAL, MDL-FLEET, MDL-LONGHAUL, MDL-HEAVYHAUL, MDL-PREMIUM"
+        expr: MODEL_ID
+        data_type: VARCHAR(50)
+      - name: OPTION_ID
+        description: References BOM_OPTIONS.OPTION_ID
+        expr: OPTION_ID
+        data_type: VARCHAR(50)
+
+  - name: TRUCK_MODELS
+    base_table:
+      database: ${DATABASE}
+      schema: ${SCHEMA}
+      table: MODEL_TBL
+    primary_key:
+      columns:
+        - MODEL_ID
+    dimensions:
+      - name: MODEL_ID
+        description: "Truck model identifier. Values: MDL-REGIONAL, MDL-FLEET, MDL-LONGHAUL, MDL-HEAVYHAUL, MDL-PREMIUM"
+        expr: MODEL_ID
+        data_type: VARCHAR(50)
+      - name: MODEL_NAME
+        description: Human-readable model name
+        expr: MODEL_NM
+        data_type: VARCHAR(100)
+    facts:
+      - name: BASE_MSRP
+        description: Base manufacturer suggested retail price
+        expr: BASE_MSRP
+        data_type: NUMBER(12,2)
+      - name: BASE_WEIGHT
+        description: Base weight of the truck model in pounds
+        expr: BASE_WEIGHT_LBS
+        data_type: NUMBER(10,2)
+
+relationships:
+  - name: MODEL_TO_OPTIONS
+    left_table: MODEL_VALID_OPTIONS
+    right_table: TRUCK_MODELS
+    relationship_columns:
+      - left_column: MODEL_ID
+        right_column: MODEL_ID
+  - name: OPTIONS_TO_BOM
+    left_table: MODEL_VALID_OPTIONS
+    right_table: BOM_OPTIONS
+    relationship_columns:
+      - left_column: OPTION_ID
+        right_column: OPTION_ID
+
+custom_instructions: |
+  CRITICAL SQL GENERATION RULES:
+  1. MODEL_ID EXTRACTION: When the question starts with "For MODEL_ID:" or "For MDL-", extract
+     the MODEL_ID value and use it in WHERE clause: mvo.model_id = '<extracted_value>'
+     Valid MODEL_IDs: MDL-REGIONAL, MDL-FLEET, MDL-LONGHAUL, MDL-HEAVYHAUL, MDL-PREMIUM
+  2. OPTIMIZATION QUERY PATTERN: For ANY query mentioning "maximize" or "minimize", follow this pattern:
+     SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs,
+            bo.performance_category, bo.performance_score
+     FROM __MODEL_VALID_OPTIONS AS mvo
+     JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+     WHERE mvo.model_id = '<MODEL_ID>'
+     QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY <ordering_logic>) = 1
+  3. ORDERING LOGIC FOR DIFFERENT QUERY TYPES:
+     a) SINGLE MINIMIZE (costs/weight):
+        Returns ALL component groups, ORDER BY bo.cost_usd ASC or bo.weight_lbs ASC
+     b) SINGLE MAXIMIZE (one category like Emissions - user says ONLY "maximize X", no mention of minimizing):
+        CRITICAL: Only return component groups that HAVE options matching the category!
+        Add WHERE clause: bo.performance_category = 'Emissions'
+        ORDER BY bo.performance_score DESC
+        This returns ONLY the relevant component groups, not all 41.
+     c) MULTI-MAXIMIZE (e.g., "maximize Safety and Comfort" - multiple categories, no minimize):
+        CRITICAL: Only return component groups that HAVE options matching ANY of the categories!
+        Add WHERE clause: bo.performance_category IN ('Safety', 'Comfort')
+        ORDER BY bo.performance_score DESC
+     d) HYBRID (e.g., "maximize Safety and Comfort while minimizing costs for everything else"):
+        Returns ALL component groups - this is the key difference from single/multi maximize!
+        ORDER BY CASE WHEN bo.performance_category IN ('Safety', 'Comfort') THEN bo.performance_score ELSE 0 END DESC, bo.cost_usd ASC
+        The cost_usd ASC tiebreaker handles "minimize costs for everything else"
+  4. PERFORMANCE_CATEGORY VALUES: Safety, Comfort, Power, Economy, Hauling, Durability, Cooling, Emissions
+     These are case-sensitive. Always use exact case in CASE WHEN statements.
+  5. ALWAYS INCLUDE: option_id, option_name, component_group, cost_usd, weight_lbs, performance_category, performance_score
+     This gives the application all the data it needs to display recommendations.
+  6. DISCOVERY QUERIES: For questions about models, options, or specs that aren't optimization queries,
+     query the appropriate tables directly without the QUALIFY pattern.
+
+verified_queries:
+  - name: minimize_costs
+    question: Minimize all costs
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.cost_usd ASC) = 1
+
+  - name: minimize_weight
+    question: Minimize weight
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.weight_lbs ASC) = 1
+
+  - name: maximize_safety
+    question: Maximize Safety
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Safety'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_comfort
+    question: Maximize Comfort
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Comfort'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_power
+    question: Maximize Power
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Power'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_economy
+    question: Maximize Economy
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Economy'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_hauling
+    question: Maximize Hauling
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Hauling'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_durability
+    question: Maximize Durability
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Durability'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_cooling
+    question: Maximize Cooling
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Cooling'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_emissions
+    question: Maximize Emissions
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category = 'Emissions'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_safety_comfort
+    question: Maximize Safety and Comfort
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category IN ('Safety', 'Comfort')
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_safety_power_comfort
+    question: Maximize Safety, Power and Comfort
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category IN ('Safety', 'Power', 'Comfort')
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_safety_comfort_minimize_costs
+    question: Maximize safety and comfort while minimizing all other costs
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER'
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY CASE WHEN bo.performance_category IN ('Safety', 'Comfort') THEN bo.performance_score ELSE 0 END DESC, bo.cost_usd ASC) = 1
+
+  - name: maximize_hauling_cooling_emissions
+    question: Maximize Hauling, Cooling and Emissions
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category IN ('Hauling', 'Cooling', 'Emissions')
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: maximize_power_durability
+    question: Maximize Power and Durability
+    sql: |
+      SELECT mvo.option_id, bo.option_name, bo.component_group, bo.cost_usd, bo.weight_lbs, 
+             bo.performance_category, bo.performance_score
+      FROM __MODEL_VALID_OPTIONS AS mvo
+      JOIN __BOM_OPTIONS AS bo ON mvo.option_id = bo.option_id
+      WHERE mvo.model_id = 'MODEL_ID_PLACEHOLDER' AND bo.performance_category IN ('Power', 'Durability')
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY bo.component_group ORDER BY bo.performance_score DESC) = 1
+
+  - name: list_all_models
+    question: What truck models are available?
+    sql: |
+      SELECT model_id, model_name, base_msrp, base_weight
+      FROM __TRUCK_MODELS
+      ORDER BY base_msrp
+
+  - name: model_highest_msrp
+    question: Which model has the highest base MSRP?
+    sql: |
+      SELECT model_id, model_name, base_msrp
+      FROM __TRUCK_MODELS
+      ORDER BY base_msrp DESC
+      LIMIT 1
+
+  - name: list_performance_categories
+    question: What performance categories are there?
+    sql: |
+      SELECT DISTINCT performance_category
+      FROM __BOM_OPTIONS
+      ORDER BY performance_category
+
+  - name: options_by_category
+    question: What options are in each component group?
+    sql: |
+      SELECT component_group, option_name, performance_category, performance_score, cost_usd
+      FROM __BOM_OPTIONS
+      ORDER BY component_group, performance_score DESC
