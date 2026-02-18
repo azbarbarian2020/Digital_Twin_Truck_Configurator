@@ -1,8 +1,8 @@
-# Digital Twin Truck Configurator - Technical Documentation
+# Digital Twin Truck Configurator - Complete Documentation
 
 **Last Updated:** 2026-02-18
 **Current Version:** v74
-**Status:** Production Ready
+**Status:** Fully Working on awsbarbarian (BOM.TRUCK_CONFIG)
 
 ---
 
@@ -29,14 +29,12 @@ An interactive truck configuration application that allows users to:
 ## 2. Architecture
 
 ### Technology Stack
-| Component | Technology |
-|-----------|------------|
-| Frontend | Next.js 15.5.11 (React) |
-| Backend | FastAPI (Python 3.11) |
-| Database | Snowflake |
-| AI/ML | Snowflake Cortex (Analyst, Complete, Search) |
-| Deployment | Snowpark Container Services (SPCS) |
-| Proxy | Nginx (routes between frontend/backend) |
+- **Frontend:** Next.js 15.5.11 (React)
+- **Backend:** FastAPI (Python 3.11)
+- **Database:** Snowflake
+- **AI/ML:** Snowflake Cortex (Analyst, Complete, Search)
+- **Deployment:** Snowpark Container Services (SPCS)
+- **Proxy:** Nginx (routes between frontend/backend)
 
 ### Container Architecture
 ```
@@ -86,19 +84,19 @@ An interactive truck configuration application that allows users to:
 
 ## 3. SPCS Deployment Configuration
 
-### Service Specification
+### Working Service Spec (v74)
 ```yaml
 spec:
   containers:
   - name: "truck-configurator"
-    image: "<registry>/truck-configurator:v74"
+    image: "sfsenorthamerica-awsbarbarian.registry.snowflakecomputing.com/bom/truck_config/truck_config_repo/truck-configurator:v74"
     env:
       SNOWFLAKE_WAREHOUSE: "DEMO_WH"
       SNOWFLAKE_DATABASE: "BOM"
       SNOWFLAKE_SCHEMA: "TRUCK_CONFIG"
-      SNOWFLAKE_ACCOUNT: "<account-identifier>"
-      SNOWFLAKE_HOST: "<account>.snowflakecomputing.com"
-      SNOWFLAKE_USER: "<username>"
+      SNOWFLAKE_ACCOUNT: "SFSENORTHAMERICA-AWSBARBARIAN"
+      SNOWFLAKE_HOST: "sfsenorthamerica-awsbarbarian.snowflakecomputing.com"
+      SNOWFLAKE_USER: "HORIZONADMIN"
       NODE_ENV: "production"
     resources:
       limits:
@@ -131,7 +129,7 @@ spec:
 CREATE NETWORK RULE SNOWFLAKE_API_RULE
   TYPE = HOST_PORT
   MODE = EGRESS
-  VALUE_LIST = ('<account>.snowflakecomputing.com:443');
+  VALUE_LIST = ('sfsenorthamerica-awsbarbarian.snowflakecomputing.com:443');
 
 CREATE EXTERNAL ACCESS INTEGRATION TRUCK_CONFIG_EXTERNAL_ACCESS
   ALLOWED_NETWORK_RULES = (SNOWFLAKE_API_RULE)
@@ -140,42 +138,7 @@ CREATE EXTERNAL ACCESS INTEGRATION TRUCK_CONFIG_EXTERNAL_ACCESS
 
 ---
 
-## 4. API Endpoints
-
-### Models & Configuration
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/models` | GET | List all truck models |
-| `/api/options/{model_id}` | GET | Get options for a model |
-| `/api/config/save` | POST | Save configuration |
-| `/api/config/list` | GET | List saved configs |
-| `/api/config/load/{id}` | GET | Load specific config |
-
-### AI/Optimization
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/chat` | POST | AI chat assistant |
-| `/api/optimize` | POST | Natural language optimization |
-| `/api/analyst` | POST | Cortex Analyst queries |
-
-### Document Management
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/documents/upload` | POST | Upload specification PDF |
-| `/api/documents/list` | GET | List uploaded documents |
-| `/api/documents/download/{id}` | GET | Get presigned download URL |
-| `/api/documents/delete/{id}` | DELETE | Delete document |
-
-### Validation
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/validate` | POST | Validate config against rules |
-| `/api/rules/{doc_id}` | GET | Get rules for a document |
-| `/api/fix-plan` | POST | Generate fix plan for violations |
-
----
-
-## 5. Key Code Patterns
+## 4. Key Code Patterns
 
 ### Snowflake Connection (backend/main.py)
 ```python
@@ -192,11 +155,15 @@ def get_connection():
             account=SNOWFLAKE_ACCOUNT,
             user=os.getenv("SNOWFLAKE_USER"),
             private_key=p_key,
-            ...
+            warehouse=SNOWFLAKE_WAREHOUSE,
+            database=SNOWFLAKE_DATABASE,
+            schema=SNOWFLAKE_SCHEMA,
         )
-    # Priority 2: SPCS OAuth token (fallback)
+    # Priority 2: SPCS OAuth token (fallback, less reliable)
     elif token:
         _connection = snowflake.connector.connect(
+            host=SNOWFLAKE_HOST,
+            account=SNOWFLAKE_ACCOUNT,
             authenticator="oauth",
             token=token,
             ...
@@ -224,7 +191,73 @@ def get_connection():
 
 ---
 
-## 6. Deployment
+## 5. Lessons Learned
+
+### SPCS Authentication
+| Issue | Symptom | Solution |
+|-------|---------|----------|
+| SPCS OAuth unauthorized | `Client is unauthorized to use Snowpark Container Services OAuth token` | Use key-pair auth via secret instead |
+| Missing SNOWFLAKE_USER | Connection fails silently | Add SNOWFLAKE_USER env var to service spec |
+| Missing secrets block | Falls back to OAuth which fails | Add secrets section with SNOWFLAKE_PRIVATE_KEY_SECRET |
+
+### Document Operations
+| Issue | Symptom | Solution |
+|-------|---------|----------|
+| Sync search refresh timeout | Upload hangs at "Indexing..." | Remove ALTER CORTEX SEARCH SERVICE REFRESH, let target_lag handle it |
+| GET command in SPCS | SQL syntax errors or no file | GET is client-side only; use presigned URLs instead |
+| Download shows JSON | Raw JSON displayed in browser | Frontend must fetch JSON, extract URL, then window.open(url) |
+
+### Format String Errors
+| Issue | Symptom | Solution |
+|-------|---------|----------|
+| Decimal formatting | `Unknown format code ',' for object of type 'Decimal'` | Wrap in try/except, use safe formatting |
+
+### Service Spec Patterns
+| Pattern | Wrong | Correct |
+|---------|-------|---------|
+| Secret reference | `snowflakeName:` | `snowflakeSecret: objectName:` |
+| Secret key ref | `secretKeyRef: password` | `secretKeyRef: secret_string` (for GENERIC_STRING) |
+| Container name | Must match supervisor config | `truck-configurator` or `main` |
+
+---
+
+## 6. File Locations
+
+### Local Development
+```
+/Users/jdrew/coco_projects/BOM/truck-configurator/
+├── backend/
+│   ├── main.py              # FastAPI backend (all API endpoints)
+│   └── requirements.txt
+├── components/
+│   ├── Configurator.tsx     # Main configurator UI
+│   ├── ChatPanel.tsx        # AI assistant chat
+│   └── ...
+├── app/
+│   ├── page.tsx             # Main page
+│   └── api/                  # Next.js API routes (some validation)
+├── Dockerfile
+├── nginx.conf
+└── deployment/
+    └── setup.sh             # Automated deployment script
+```
+
+### Snowflake Objects
+```
+BOM.TRUCK_CONFIG/
+├── Tables: MODEL_TBL, BOM_TBL, TRUCK_OPTIONS, SAVED_CONFIGS
+├── Tables: ENGINEERING_DOCS_CHUNKED, VALIDATION_RULES
+├── Stage: ENGINEERING_DOCS_STAGE
+├── Search: ENGINEERING_DOCS_SEARCH
+├── View: TRUCK_CONFIG_ANALYST_V2 (semantic)
+├── Secret: SNOWFLAKE_PRIVATE_KEY_SECRET
+├── Repo: TRUCK_CONFIG_REPO
+└── Service: TRUCK_CONFIGURATOR_SVC
+```
+
+---
+
+## 7. Deployment Checklist
 
 ### Fresh Deployment
 1. Run `deployment/setup.sh`
@@ -255,7 +288,7 @@ $$;
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 ### Check Service Status
 ```sql
@@ -268,8 +301,8 @@ CALL SYSTEM$GET_SERVICE_LOGS('BOM.TRUCK_CONFIG.TRUCK_CONFIGURATOR_SVC', 0, 'truc
 ```
 
 ### Common Issues
-| Symptom | Cause | Fix |
-|---------|-------|-----|
+| Log Message | Cause | Fix |
+|-------------|-------|-----|
 | "Client is unauthorized to use Snowpark Container Services OAuth token" | Missing key-pair auth | Add secrets block to service spec |
 | "Could not connect to Snowflake backend" | Wrong network rule | Network rule must include account host |
 | 500 on /api/models | Backend can't connect to Snowflake | Check auth, check logs |
@@ -277,64 +310,22 @@ CALL SYSTEM$GET_SERVICE_LOGS('BOM.TRUCK_CONFIG.TRUCK_CONFIGURATOR_SVC', 0, 'truc
 
 ---
 
-## 8. File Structure
+## 9. Version History
 
-```
-truck-configurator/
-├── backend/
-│   ├── main.py              # FastAPI backend (all API endpoints)
-│   └── requirements.txt
-├── components/
-│   ├── Configurator.tsx     # Main configurator UI
-│   ├── ChatPanel.tsx        # AI assistant chat
-│   └── ...
-├── app/
-│   ├── page.tsx             # Main page
-│   └── api/                 # Next.js API routes
-├── docs/
-│   ├── 605_HP_Engine_Requirements.md
-│   ├── Heavy_Haul_Chassis_Requirements.md
-│   └── DOCUMENTATION.md     # This file
-├── public/
-│   └── Digital_Twin_Truck_Config.png
-├── deployment/
-│   └── setup.sh             # Automated deployment script
-├── Dockerfile
-├── nginx.conf
-└── README.md
-```
+| Version | Date | Changes |
+|---------|------|---------|
+| v74 | 2026-02-18 | Fixed download: frontend fetches presigned URL from JSON response |
+| v73 | 2026-02-18 | Fixed download: backend returns presigned URL (GET doesn't work in SPCS) |
+| v72 | 2026-02-18 | Attempted GET command fix (didn't work) |
+| v71 | 2026-02-18 | Removed sync search refresh from upload/delete |
+| v70 | 2026-02-18 | Various validation fixes |
+| Earlier | Various | Initial development |
 
 ---
 
-## 9. Snowflake Objects
+## 10. Accounts
 
-```
-BOM.TRUCK_CONFIG/
-├── Tables: MODEL_TBL, BOM_TBL, TRUCK_OPTIONS, SAVED_CONFIGS
-├── Tables: ENGINEERING_DOCS_CHUNKED, VALIDATION_RULES
-├── Stage: ENGINEERING_DOCS_STAGE
-├── Search Service: ENGINEERING_DOCS_SEARCH
-├── Semantic View: TRUCK_CONFIG_ANALYST_V2
-├── Secret: SNOWFLAKE_PRIVATE_KEY_SECRET
-├── Image Repository: TRUCK_CONFIG_REPO
-├── Compute Pool: TRUCK_CONFIG_POOL
-└── Service: TRUCK_CONFIGURATOR_SVC
-```
-
----
-
-## 10. Lessons Learned
-
-### SPCS Authentication
-- SPCS OAuth alone is unreliable; always use key-pair auth via secrets
-- Must include SNOWFLAKE_USER env var for key-pair auth to work
-- Secrets must use `objectName:` nested under `snowflakeSecret:`
-
-### Document Operations
-- Sync search refresh (`ALTER CORTEX SEARCH SERVICE REFRESH`) causes timeouts
-- Use `target_lag` auto-refresh instead
-- GET command doesn't work in SPCS; use presigned URLs
-
-### Service Deployment
-- `CREATE OR REPLACE SERVICE` is NOT supported in SPCS
-- Must use `DROP SERVICE IF EXISTS` followed by `CREATE SERVICE`
+| Account | Schema | Status | Endpoint |
+|---------|--------|--------|----------|
+| awsbarbarian | BOM.TRUCK_CONFIG | ✅ Working (v74) | nfd4536c-sfsenorthamerica-awsbarbarian.snowflakecomputing.app |
+| jdrew | BOM.TRUCK_CONFIG | ✅ Working | i4vf4-sfsenorthamerica-jdrew.snowflakecomputing.app |
