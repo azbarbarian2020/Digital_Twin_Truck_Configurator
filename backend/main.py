@@ -1587,6 +1587,7 @@ async def upload_engineering_doc(
             yield f"data: {json.dumps({'step': 'search', 'status': 'done', 'message': 'Auto-indexed'})}\n\n"
             
             # Step 5: Extract validation rules using Cortex Complete
+            print(f"DEBUG: Starting rule extraction for {doc_title}, chunks: {len(chunks)}")
             yield f"data: {json.dumps({'step': 'rules', 'status': 'active', 'message': 'Extracting validation rules...'})}\n\n"
             
             rules_created = 0
@@ -1628,8 +1629,10 @@ Return [] if no numeric requirements found. Return ONLY the JSON array.""".repla
                     SELECT SNOWFLAKE.CORTEX.COMPLETE('mistral-large2', '{prompt}') AS RESPONSE
                 """)
                 
+                print(f"DEBUG: Cortex Complete returned {len(ai_result)} rows")
                 if ai_result and len(ai_result) > 0:
                     response = ai_result[0].get("RESPONSE", "").strip()
+                    print(f"DEBUG: AI response: {response[:200]}...")
                     # Strip markdown code blocks
                     response = response.replace("```json", "").replace("```", "")
                     
@@ -1678,7 +1681,9 @@ Return [] if no numeric requirements found. Return ONLY the JSON array.""".repla
                         print(f"Created {rules_created} validation rules for {doc_title}")
                 
             except Exception as rule_err:
+                import traceback
                 print(f"Rule extraction error: {rule_err}")
+                print(f"DEBUG traceback: {traceback.format_exc()}")
             
             yield f"data: {json.dumps({'step': 'rules', 'status': 'done', 'message': f'{rules_created} rules created'})}\n\n"
             
