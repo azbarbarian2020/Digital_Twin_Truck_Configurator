@@ -45,9 +45,10 @@ run_sql() {
 }
 
 # Get account hostname for network rule (auto-detect)
-ACCOUNT_HOST=$(snow sql -q "SELECT CONCAT(LOWER(CURRENT_ORGANIZATION_NAME()), '-', LOWER(CURRENT_ACCOUNT_NAME()), '.snowflakecomputing.com')" --connection "$CONNECTION_NAME" --format json 2>/dev/null | grep -o '"CONCAT[^"]*":"[^"]*"' | cut -d'"' -f4 || echo "")
+ACCOUNT_HOST=$(snow sql -q "SELECT CONCAT(LOWER(CURRENT_ORGANIZATION_NAME()), '-', LOWER(CURRENT_ACCOUNT_NAME()), '.snowflakecomputing.com') AS HOST" --connection "$CONNECTION_NAME" 2>/dev/null | grep -v "SELECT" | grep "snowflakecomputing.com" | tr -d '| ' | head -1)
 
-if [[ -z "$ACCOUNT_HOST" ]]; then
+if [[ -z "$ACCOUNT_HOST" || ! "$ACCOUNT_HOST" == *"snowflakecomputing.com"* ]]; then
+    echo "Could not auto-detect account hostname."
     read -p "Enter your Snowflake hostname (e.g., sfsenorthamerica-jdrew.snowflakecomputing.com): " ACCOUNT_HOST
 fi
 
@@ -249,12 +250,12 @@ echo "-----------------------------------------------"
 # Process YAML - replace placeholders
 sed "s/\${DATABASE}/$DATABASE/g; s/\${SCHEMA}/$SCHEMA/g" "$SCRIPT_DIR/deployment/data/truck_config_analyst.yaml" > /tmp/truck_config_analyst_processed.yaml
 
-# Upload to stage
+# Upload to stage (for reference/backup)
 snow stage copy /tmp/truck_config_analyst_processed.yaml "@$DATABASE.$SCHEMA.SEMANTIC_MODELS/" --connection "$CONNECTION_NAME" --overwrite 2>/dev/null || true
 
-# Create semantic view
-run_sql "CREATE OR REPLACE SEMANTIC VIEW $DATABASE.$SCHEMA.TRUCK_CONFIG_ANALYST
-    FROM '@$DATABASE.$SCHEMA.SEMANTIC_MODELS/truck_config_analyst_processed.yaml'"
+# Create semantic view using stored procedure with YAML content
+YAML_CONTENT=$(cat /tmp/truck_config_analyst_processed.yaml)
+snow sql -q "CALL SYSTEM\$CREATE_SEMANTIC_VIEW_FROM_YAML('$DATABASE.$SCHEMA', \$\$${YAML_CONTENT}\$\$)" --connection "$CONNECTION_NAME"
 echo "Semantic view created."
 echo ""
 
@@ -343,7 +344,8 @@ spec:
       SNOWFLAKE_WAREHOUSE: $WAREHOUSE
       NODE_ENV: production
     secrets:
-    - snowflakeSecret: $DATABASE.$SCHEMA.SNOWFLAKE_PRIVATE_KEY_SECRET
+    - snowflakeSecret:
+        objectName: $DATABASE.$SCHEMA.SNOWFLAKE_PRIVATE_KEY_SECRET
       secretKeyRef: secret_string
       envVarName: SNOWFLAKE_PRIVATE_KEY
     resources:

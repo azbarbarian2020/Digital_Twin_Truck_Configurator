@@ -723,16 +723,32 @@ export function Configurator({ model, selectedOptions, setSelectedOptions, onSav
                                     <span
                                       role="button"
                                       tabIndex={0}
-                                      onClick={(e) => {
+                                      onClick={async (e) => {
                                         e.stopPropagation();
                                         e.preventDefault();
-                                        window.open(`/api/engineering-docs/download?docId=${encodeURIComponent(docInfo.docId)}`, '_blank');
+                                        try {
+                                          const res = await fetch(`/api/engineering-docs/download?docId=${encodeURIComponent(docInfo.docId)}`);
+                                          const data = await res.json();
+                                          if (data.url) {
+                                            window.open(data.url, '_blank');
+                                          }
+                                        } catch (err) {
+                                          console.error('Download error:', err);
+                                        }
                                       }}
-                                      onKeyDown={(e) => {
+                                      onKeyDown={async (e) => {
                                         if (e.key === 'Enter' || e.key === ' ') {
                                           e.stopPropagation();
                                           e.preventDefault();
-                                          window.open(`/api/engineering-docs/download?docId=${encodeURIComponent(docInfo.docId)}`, '_blank');
+                                          try {
+                                            const res = await fetch(`/api/engineering-docs/download?docId=${encodeURIComponent(docInfo.docId)}`);
+                                            const data = await res.json();
+                                            if (data.url) {
+                                              window.open(data.url, '_blank');
+                                            }
+                                          } catch (err) {
+                                            console.error('Download error:', err);
+                                          }
                                         }
                                       }}
                                       className="flex items-center gap-0.5 hover:bg-blue-100 rounded p-0.5 transition-colors cursor-pointer"

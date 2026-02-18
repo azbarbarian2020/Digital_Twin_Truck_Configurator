@@ -196,6 +196,10 @@ CREATE NETWORK RULE SNOWFLAKE_API_RULE
 | "Could not connect to Snowflake" | Network rule wrong | Use account-specific hostname |
 | Auth failures in SPCS | Secret format | Store base64 key without headers |
 | Service won't start | Missing objects | Check compute pool, secret, integration exist |
+| "Client is unauthorized to use SPCS OAuth" | SPCS OAuth unreliable | Use key-pair auth via secrets (setup.sh does this) |
+| Upload hangs at "Indexing..." | Sync Cortex Search refresh | Fixed in v74 - uses target_lag auto-refresh |
+| Download shows JSON | Frontend expects redirect | Fixed in v74 - fetches URL from JSON |
+| Service missing SNOWFLAKE_USER | Key-pair auth needs username | Add SNOWFLAKE_USER to env vars |
 
 ### Check Service Logs
 

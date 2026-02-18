@@ -1134,17 +1134,20 @@ def validate_config(req: ValidateRequest):
                 
                 # Check minimum
                 if min_val is not None and actual_value < float(min_val):
-                    print(f"  ✗ {spec_name}={actual_value} < {min_val} ✗")
+                    print(f"  X {spec_name}={actual_value} < {min_val} X")
                     all_passed = False
                     failed_specs.append({
                         "specName": spec_name,
-                        "currentValue": actual_value,
+                        "currentValue": float(actual_value) if actual_value else 0,
                         "requiredValue": float(min_val),
                         "unit": unit,
                         "reason": f"{spec_name}={actual_value} {unit} < required {min_val} {unit}"
                     })
                 elif min_val is not None:
-                    print(f"  ✓ {spec_name}={actual_value:,} >= {min_val:,} ✓")
+                    try:
+                        print(f"  OK {spec_name}={float(actual_value):,.0f} >= {float(min_val):,.0f} OK")
+                    except:
+                        print(f"  OK {spec_name}={actual_value} >= {min_val} OK")
                 
                 # Check maximum
                 if max_val is not None and actual_value > float(max_val):
@@ -1182,7 +1185,16 @@ def validate_config(req: ValidateRequest):
                 print(f"  Evaluating {len(candidates)} candidates...")
                 
                 for candidate in candidates:
-                    cand_specs = candidate['SPECS'] if isinstance(candidate['SPECS'], dict) else json.loads(candidate['SPECS']) if candidate['SPECS'] else {}
+                    cand_specs_raw = candidate.get('SPECS')
+                    if isinstance(cand_specs_raw, dict):
+                        cand_specs = cand_specs_raw
+                    elif isinstance(cand_specs_raw, str):
+                        try:
+                            cand_specs = json.loads(cand_specs_raw)
+                        except:
+                            cand_specs = {}
+                    else:
+                        cand_specs = {}
                     
                     # Check if candidate meets ALL rules
                     meets_all = True
@@ -1549,25 +1561,30 @@ async def upload_engineering_doc(
             # Insert chunks into table (LINKED_PARTS stored in VALIDATION_RULES, not here)
             stage_path = f"@{SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.ENGINEERING_DOCS_STAGE/{staged_filename}"
             
+            chunks_inserted = 0
             for i, chunk in enumerate(chunks):
-                chunk_escaped = chunk.replace("'", "''").replace("\\", "\\\\")
-                query(f"""
-                    INSERT INTO {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.ENGINEERING_DOCS_CHUNKED
-                    (DOC_ID, DOC_TITLE, DOC_PATH, CHUNK_INDEX, CHUNK_TEXT)
-                    SELECT '{doc_id}', '{doc_title.replace("'", "''")}', '{stage_path}', 
-                           {i}, '{chunk_escaped}'
-                """)
+                try:
+                    chunk_escaped = chunk.replace("'", "''").replace("\\", "\\\\")
+                    query(f"""
+                        INSERT INTO {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.ENGINEERING_DOCS_CHUNKED
+                        (DOC_ID, DOC_TITLE, DOC_PATH, CHUNK_INDEX, CHUNK_TEXT)
+                        SELECT '{doc_id}', '{doc_title.replace("'", "''")}', '{stage_path}', 
+                               {i}, '{chunk_escaped}'
+                    """)
+                    chunks_inserted += 1
+                except Exception as chunk_err:
+                    print(f"Error inserting chunk {i}: {chunk_err}")
             
-            yield f"data: {json.dumps({'step': 'chunk', 'status': 'done', 'message': f'{len(chunks)} chunks'})}\n\n"
+            if chunks_inserted == 0:
+                yield f"data: {json.dumps({'step': 'chunk', 'status': 'error', 'message': 'Failed to insert chunks'})}\n\n"
+                yield f"data: {json.dumps({'type': 'result', 'success': False, 'error': 'Failed to insert document chunks'})}\n\n"
+                return
             
-            # Step 4: Refresh search service
-            yield f"data: {json.dumps({'step': 'search', 'status': 'active', 'message': 'Indexing...'})}\n\n"
-            try:
-                query(f"ALTER CORTEX SEARCH SERVICE {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.ENGINEERING_DOCS_SEARCH REFRESH")
-                yield f"data: {json.dumps({'step': 'search', 'status': 'done'})}\n\n"
-            except Exception as refresh_err:
-                print(f"Search refresh warning: {refresh_err}")
-                yield f"data: {json.dumps({'step': 'search', 'status': 'done', 'message': 'Auto-refresh scheduled'})}\n\n"
+            print(f"Inserted {chunks_inserted}/{len(chunks)} chunks for {doc_title}")
+            yield f"data: {json.dumps({'step': 'chunk', 'status': 'done', 'message': f'{chunks_inserted} chunks'})}\n\n"
+            
+            # Step 4: Search index (handled by target_lag, no sync refresh needed)
+            yield f"data: {json.dumps({'step': 'search', 'status': 'done', 'message': 'Auto-indexed'})}\n\n"
             
             # Step 5: Extract validation rules using Cortex Complete
             yield f"data: {json.dumps({'step': 'rules', 'status': 'active', 'message': 'Extracting validation rules...'})}\n\n"
@@ -1754,11 +1771,7 @@ async def delete_engineering_doc(req: DeleteDocRequest):
         except:
             pass
         
-        # Refresh search service
-        try:
-            query(f"ALTER CORTEX SEARCH SERVICE {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.ENGINEERING_DOCS_SEARCH REFRESH")
-        except:
-            pass
+        # Search index updates via target_lag automatically
         
         return {"success": True, "deletedDocId": req.docId, "docTitle": doc_title}
     except HTTPException:
@@ -1910,8 +1923,7 @@ def build_bom_hierarchy(all_options: List[Dict], selected_ids: List[str], defaul
 
 @app.get("/api/engineering-docs/download")
 async def download_engineering_doc(docId: str):
-    """Download an engineering document using presigned URL redirect"""
-    from fastapi.responses import RedirectResponse
+    """Download an engineering document - returns presigned URL for browser download"""
     try:
         docs = query(f"""
             SELECT DISTINCT DOC_PATH, DOC_TITLE 
@@ -1924,9 +1936,13 @@ async def download_engineering_doc(docId: str):
             raise HTTPException(status_code=404, detail="Document not found")
         
         doc_path = docs[0]["DOC_PATH"]
+        doc_title = docs[0]["DOC_TITLE"]
         filename = doc_path.split('/')[-1] if '/' in doc_path else doc_path
         
-        # Generate presigned URL and redirect to it
+        if not filename:
+            raise HTTPException(status_code=404, detail="Document path invalid")
+        
+        # Generate presigned URL for download
         presigned_result = query(f"""
             SELECT GET_PRESIGNED_URL(
                 @{SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.ENGINEERING_DOCS_STAGE,
@@ -1936,9 +1952,9 @@ async def download_engineering_doc(docId: str):
         """)
         
         if presigned_result and presigned_result[0].get("URL"):
-            return RedirectResponse(url=presigned_result[0]["URL"])
+            return {"url": presigned_result[0]["URL"], "filename": doc_title}
         
-        raise HTTPException(status_code=500, detail="Could not generate presigned URL")
+        raise HTTPException(status_code=500, detail="Could not generate download URL")
             
     except HTTPException:
         raise
