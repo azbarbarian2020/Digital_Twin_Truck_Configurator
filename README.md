@@ -59,10 +59,14 @@ This proof-of-concept demonstrates how Snowflake's unified data platform can rev
 │                                                                      │
 │  ┌──────────────────────────────────────────────────────────────────┐│
 │  │                         Data Layer                                ││
-│  │  ┌──────────┐  ┌───────────┐  ┌────────────┐  ┌───────────────┐ ││
-│  │  │ BOM_TBL  │  │ MODEL_TBL │  │ VALIDATION │  │ ENGINEERING   │ ││
-│  │  │(253 opts)│  │ (5 models)│  │   _RULES   │  │ DOCS_CHUNKED  │ ││
-│  │  └──────────┘  └───────────┘  └────────────┘  └───────────────┘ ││
+│  │  ┌──────────┐  ┌───────────┐  ┌──────────────┐  ┌─────────────┐ ││
+│  │  │ BOM_TBL  │  │ MODEL_TBL │  │ TRUCK_OPTIONS│  │SAVED_CONFIGS│ ││
+│  │  │(253 opts)│  │ (5 models)│  │  (868 maps)  │  │             │ ││
+│  │  └──────────┘  └───────────┘  └──────────────┘  └─────────────┘ ││
+│  │  ┌────────────────┐  ┌─────────────────────┐  ┌──────────────┐ ││
+│  │  │VALIDATION_RULES│  │ENGINEERING_DOCS_    │  │ CHAT_HISTORY │ ││
+│  │  │                │  │       CHUNKED       │  │              │ ││
+│  │  └────────────────┘  └─────────────────────┘  └──────────────┘ ││
 │  └──────────────────────────────────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -121,10 +125,9 @@ The SPCS container runs three services orchestrated by supervisor:
 ```bash
 # 1. Clone the repository
 git clone https://github.com/azbarbarian2020/Digital_Twin_Truck_Configurator.git
-cd Digital_Twin_Truck_Configurator/truck-configurator
+cd Digital_Twin_Truck_Configurator
 
 # 2. Run the automated setup script
-cd deployment
 ./setup.sh
 ```
 
@@ -309,7 +312,7 @@ Each BOM option has technical specifications stored as JSON:
 - **Database**: Snowflake
 - **AI Services**: Snowflake Cortex (Complete, Search, Analyst, Agent, PARSE_DOCUMENT)
 - **Deployment**: Snowpark Container Services (SPCS)
-- **Authentication**: SPCS OAuth
+- **Authentication**: Key-pair authentication via Snowflake secrets
 - **Container Orchestration**: Supervisor (nginx + uvicorn + node)
 
 ## Project Structure
@@ -328,14 +331,12 @@ truck-configurator/
 │   ├── ChatPanel.tsx     # AI chat assistant
 │   └── ...
 ├── deployment/
-│   ├── scripts/          # SQL deployment scripts
-│   │   ├── 01_setup_infrastructure.sql
-│   │   ├── 02_create_tables.sql
-│   │   ├── 03_load_data.sql
-│   │   └── 04_cortex_services.sql
+│   ├── data/             # JSON data files for BOM, models, options
 │   ├── docs/             # Sample engineering spec PDFs
-│   └── setup.sh          # Automated deployment script
-├── Dockerfile            # Multi-stage build (includes supervisord config)
+│   └── scripts/          # SQL deployment scripts
+├── docs/                  # Documentation and requirements
+├── setup.sh               # Automated deployment script (run from root)
+├── Dockerfile             # Multi-stage build (includes supervisord config)
 ├── nginx.conf            # Reverse proxy config
 ├── package.json
 └── .gitignore
