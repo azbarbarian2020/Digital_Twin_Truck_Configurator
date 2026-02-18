@@ -22,7 +22,15 @@ echo "------------------------"
 echo ""
 echo "Available Snowflake CLI connections:"
 echo ""
-snow connection list 2>/dev/null || echo "  (none found)"
+
+# Show connections in a cleaner format
+CONN_LIST=$(snow connection list 2>/dev/null | grep -v "^+" | grep -v "connection_name" | grep "|" | awk -F'|' '{gsub(/^ +| +$/, "", $2); gsub(/^ +| +$/, "", $3); if($2 != "") print "  " NR ". " $2 " (" $3 ")"}')
+
+if [[ -z "$CONN_LIST" ]]; then
+    echo "  (no connections found)"
+else
+    echo "$CONN_LIST"
+fi
 echo ""
 
 read -p "Enter connection name to use: " CONNECTION_NAME
