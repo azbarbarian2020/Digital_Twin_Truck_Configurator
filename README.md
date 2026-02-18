@@ -89,16 +89,17 @@ The SPCS container runs three services orchestrated by supervisor:
 - Real-time summary shows total price, weight, and performance vs default
 
 ### 3. Configuration Assistant (30s)
+- Return to main screen and select the **Heavy Haul Max HH-1200** model
 - Open AI chat and ask: *"Maximize comfort and safety while minimizing all other costs"*
 - AI analyzes all 253 options and recommends optimal configuration
 - One-click "Apply" updates configuration instantly
 
 ### 4. Engineering Spec Validation (45s) - **KEY FEATURE**
-- Select a component (e.g., Engine or Turbocharger)
-- Upload engineering specification PDF
+- Select **Engine > Engine Block > Power Rating > 605 HP / 2050 lb-ft Maximum**
+- Upload the `605_HP_Engine_Requirements.pdf`
 - AI extracts validation rules from document text
 - Click "Verify Configuration" - AI compares spec requirements against selected components
-- View mismatches: *"Spec requires minimum 500 HP, selected engine provides 400 HP"*
+- View configuration violations
 - Click "Apply Fix Plan" to auto-resolve issues
 
 ### 5. Save & Compare (25s)
