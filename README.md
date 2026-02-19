@@ -129,6 +129,15 @@ cd Digital_Twin_Truck_Configurator
 
 # 2. Run the automated setup script
 ./setup.sh
+
+NOTE: If the trucks don't show up in the interface main screen you may have to run the following commands:
+
+-- Check the logs for the blocked IP
+CALL SYSTEM$GET_SERVICE_LOGS('BOM.TRUCK_CONFIG.TRUCK_CONFIGURATOR_SVC', '0', 'truck-configurator', 50);
+
+-- Look for: "Incoming request with IP/Token X.X.X.X is not allowed"
+-- Then add it:
+ALTER NETWORK POLICY ACCOUNT_VPN_POLICY_SE ADD ALLOWED_IP_LIST = ('NEW.IP.HERE');
 ```
 
 ### What setup.sh Does
